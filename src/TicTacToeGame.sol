@@ -10,9 +10,6 @@ import "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import "openzeppelin-contracts/contracts/access/Ownable.sol";
 
-// ============================================================================
-// ENUMS & STRUCTS
-// ============================================================================
 
 enum GameState {
     OPEN,
@@ -43,7 +40,10 @@ struct Board {
 }
 
 struct Match {
+    // pass enum here
     GameState state;
+    // pass player struct
+
     Player[] players;
     uint8 currentRound;
     uint256 totalStableAmount;
@@ -56,14 +56,12 @@ struct Match {
     uint256 autoRefundTime;
 }
 
-// ============================================================================
-// INTERFACES
-// ============================================================================
-
+// meta data inherit erc20 and decimal is the additional function passed
 interface IERC20Metadata is IERC20 {
     function decimals() external view returns (uint8);
 }
 
+// uniswap V3 interface
 interface ISwapRouter {
     struct ExactInputSingleParams {
         address tokenIn;
@@ -86,22 +84,29 @@ interface ITicTacToeGame {
     function executeGaslessWithdrawal(uint256 matchId, address recipient) external;
 }
 
-// ============================================================================
-// PRICE FEED MANAGER
-// ============================================================================
-
 contract PriceFeedManager is Ownable {
     using SafeERC20 for IERC20;
-    
+    // mapping token address to chainlink address 
     mapping(address => address) public priceFeeds;
+    // array of supported tokens
     address[] public supportedTokens;
+    // mapping of token address to boolean to check if token is supported or not
     mapping(address => bool) public isTokenSupported;
     
+
+    // two events to be logged as modification
+
+    // to add token we need its address and price feeds
     event TokenAdded(address indexed token, address indexed priceFeed);
+    // to remove token we need its address only
     event TokenRemoved(address indexed token);
     
+    // ownable constructor inherited from ownable
+    // pass in the deployers address
     constructor() Ownable(msg.sender) {
+        // push its supported native eth token
         supportedTokens.push(address(0));
+        // check if native eth is supported
         isTokenSupported[address(0)] = true;
     }
     
@@ -109,45 +114,70 @@ contract PriceFeedManager is Ownable {
         require(!isTokenSupported[token], "Token already supported");
         require(priceFeed != address(0), "Invalid price feed");
         
+        // token is the key here
+        // price feeds is a mapping of adrs to adrs
         priceFeeds[token] = priceFeed;
+        // push the token
         supportedTokens.push(token);
+        // is the token supported = ?
         isTokenSupported[token] = true;
         
+        // log it out for external dapps to pick it up!
         emit TokenAdded(token, priceFeed);
     }
     
+    // only adrs is needed to remove a token
+    // check token must not be adrs 0 since we cant remove native eth
+    // its is required for the key [token] adrs to be supported in the array state variable above
     function removeToken(address token) external onlyOwner {
         require(token != address(0), "Cannot remove ETH");
         require(isTokenSupported[token], "Token not supported");
         
+        // another check to be truly sure the [token] is removed
         isTokenSupported[token] = false;
+
+        // delete set the value back to default
         delete priceFeeds[token];
-        
+        // emit it
         emit TokenRemoved(token);
     }
     
+    // to get price you need the adrs
+    // it is required to check if the token is supported or else stop the execution
     function getPrice(address token) public view returns (uint256) {
         require(isTokenSupported[token], "Token not supported");
         
+        // check if its a native eth then set the mapping of the token to an adrs called token
+        // else return its default value
         if (token == address(0)) {
             address feed = priceFeeds[token];
             if (feed == address(0)) {
                 return 2000 * 10**8;
             }
         }
+
+        // the second part is chec for erc-20 tokens
+        // do the usual mapping into feed and check if feed is not invalid 
         
         address feed = priceFeeds[token];
         require(feed != address(0), "No price feed");
+
+        // we shall type cast adrs feed into aggregator format
+        // call it pricefeed and request latest round data from it
+        // we need the price and time of update only the rest shall be skipped
         
         AggregatorV3Interface priceFeed = AggregatorV3Interface(feed);
         (, int256 price, , uint256 updatedAt, ) = priceFeed.latestRoundData();
+
+        // required to check if price is invalid
+        // required to check there is an hour time diffrence too
         
         require(price > 0, "Invalid price");
         require(updatedAt > block.timestamp - 1 hours, "Stale price");
         
         return uint256(price);
     }
-    
+    // 
     function getUsdValue(address token, uint256 amount) public view returns (uint256) {
         uint256 price = getPrice(token);
         
