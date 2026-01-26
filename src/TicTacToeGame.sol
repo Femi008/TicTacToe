@@ -11,7 +11,7 @@ import "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 
-
+// game state
 enum GameState {
     OPEN,
     STAKED,
@@ -22,12 +22,15 @@ enum GameState {
     CANCELLED
 }
 
+// the board is occupied by player1 or player2 or empty
+// enum is a set of named constants
 enum CellState {
     EMPTY,
     PLAYER1,
     PLAYER2
 }
 
+// struct is a way to group related items into one composite function
 struct Player {
     address addr;
     uint256 stableAmount;
@@ -35,31 +38,35 @@ struct Player {
     bool withdrawn;
 }
 
+// movecount tracks the movement of the 3x3 board 
 struct Board {
     CellState[3][3] cells;
     uint8 moveCount;
 }
 
+// tracks everything about the match
 struct Match {
-    GameState state;
-    Player[] players;
-    uint8 currentRound;
-    uint256 totalStableAmount;
-    uint8 starterIndex;
-    address winner;
-    uint256 createdAt;
-    Board currentBoard;
-    uint8 currentPlayerIndex;
-    uint256 lastMoveTime;
-    uint256 autoRefundTime;
+    GameState state; // enum tracking the game state
+    Player[] players; // struct of players
+    uint8 currentRound; // which round is the game at the time
+    uint256 totalStableAmount; // total amount of stables deposited
+    uint8 starterIndex; // player that starts the game
+    address winner; // player tracks both round and game winners
+    uint256 createdAt; // time
+    Board currentBoard; // keeps track of the current positiosn
+    uint8 currentPlayerIndex; // maps the position to player0 or player1 or empty
+    uint256 lastMoveTime; // records time the last move was made 
+    uint256 autoRefundTime; // dealine for refund
 }
 
 
-
+// this is the interface for Ierc20 but additional functio decimals is added
 interface IERC20Metadata is IERC20 {
     function decimals() external view returns (uint8);
 }
 
+
+// this is uniswap Router v3 interface
 interface ISwapRouter {
     struct ExactInputSingleParams {
         address tokenIn;
@@ -71,12 +78,15 @@ interface ISwapRouter {
         uint160 sqrtPriceLimitX96;
     }
 
+    // here we are passing the struct into the fucntion
+    // call data is telling us the function will be passed in from external call
     function exactInputSingle(ExactInputSingleParams calldata params)
         external
         payable
         returns (uint256 amountOut);
 }
 
+// payable mark a funtion able to recieve ETH
 interface IWETH {
     function deposit() external payable;
     function withdraw(uint256) external;
@@ -84,116 +94,177 @@ interface IWETH {
     function balanceOf(address) external view returns (uint256);
 }
 
+// interface defines eternal contracts without implementation
 interface ITicTacToeGame {
+    // this is the callback fucnction that delivers the random number back to the contract
     function handleVRFFulfillment(uint256 matchId, uint256 randomNumber) external;
+    // allows players to withdraw wins without paying for gas fees themselves
     function executeGaslessWithdrawal(uint256 matchId, address recipient) external;
 }
 
 
-
+// This is the PriceManager controls the price feeds and its inherit ownable
 contract PriceFeedManager is Ownable {
+    // extending the traditional erc-20 functions with SafeErc-20
     using SafeERC20 for IERC20;
-
+    
+    // mapping of token address to chainLink address
     mapping(address => address) public priceFeeds;
+    // a list or array of supported tokens 
     address[] public supportedTokens;
+    // a mapping of supported token address to boolean either true or false
     mapping(address => bool) public isTokenSupported;
-
+    
+    // log events so external dapps can picks it up
     event TokenAdded(address indexed token, address indexed priceFeed);
     event TokenRemoved(address indexed token);
 
+    // Ownable inherited is used here and te deployer address is passed into here
     constructor() Ownable(msg.sender) {
+        // since Native Eth is not supported then we push Address(0) 
         supportedTokens.push(address(0));
+        // this is to check if native eth is now part of the supported token address
         isTokenSupported[address(0)] = true;
     }
 
+    // when we are about to add tokens we need the token address and the price feed address
+    // only owner could add token to prevent malicious token added to the supported list
+
     function addToken(address token, address priceFeed) external onlyOwner {
+        // it is required to check if the token is suportted where token is the key
         require(!isTokenSupported[token], "Token already supported");
+        // it is required to check if token is not invalid 
         require(priceFeed != address(0), "Invalid price feed");
-
+    
+        // here we specify the key to the mapping pricefeeds
         priceFeeds[token] = priceFeed;
+        // here we push the supported er20 token
         supportedTokens.push(token);
+        // we double check if its added or not
         isTokenSupported[token] = true;
-
+        // we emit the token added for external dapps and front end
         emit TokenAdded(token, priceFeed);
     }
 
+// when we are about to discard token we only need the address and also restricted from everyone
     function removeToken(address token) external onlyOwner {
+        // its is importan to check if its is native ETH, because we cant remove it
         require(token != address(0), "Cannot remove ETH");
+        // here we check if supported token list exist using the key "token"
         require(isTokenSupported[token], "Token not supported");
-
+    // here we set the confirmed supported token to be false 
         isTokenSupported[token] = false;
+        // we then set the pricefeed to default
         delete priceFeeds[token];
-
+    // we emit the removal of the token
         emit TokenRemoved(token);
     }
 
+// use for fetching the price of each tokens, it is public and could be accessed by anyone
     function getPrice(address token) public view returns (uint256) {
+        // it is required to check if the token mapping exist
         require(isTokenSupported[token], "Token not supported");
-
+    // then set price feed mapping to be variable feed with type address
         address feed = priceFeeds[token];
+        // if feed is invalid then stop execution immediately
         require(feed != address(0), "No price feed configured");
 
+    // using a wrapper function, wrap the feed by aggregatorInterface 
+    // and set the variable name to be priceFeed
         AggregatorV3Interface priceFeed = AggregatorV3Interface(feed);
+        // from priceFeed get latetsRound Data and return price and updatedtime
         (, int256 price, , uint256 updatedAt, ) = priceFeed.latestRoundData();
 
+    // check if price > 0 
+    // check if updatedtime > last 1 hr blockstamp
         require(price > 0, "Invalid price");
         require(updatedAt > block.timestamp - 1 hours, "Stale price");
 
         return uint256(price);
     }
 
+    // get the decimals for native eth / erc20- tokens
+    // takes in address and its a view 
     function getPriceDecimals(address token) public view returns (uint8) {
+        // feed  is a local variable
         address feed = priceFeeds[token];
+
         require(feed != address(0), "No price feed configured");
+        // return the decimals of the feed inputed into aggregatorV3
+        // cast the address into chainlink interface
         return AggregatorV3Interface(feed).decimals();
     }
 
     // Returns USD value in 18 decimals
+    // getusdvalue takes in token address and amount its public 
     function getUsdValue(address token, uint256 amount) public view returns (uint256) {
-        uint256 price = getPrice(token);                 // price in priceDecimals
+        uint256 price = getPrice(token);      // price in priceDecimals
+        //pass in the token address into get decimals function
         uint8 priceDecimals = getPriceDecimals(token);
 
+    // if the token is native ETH return 18 decimals 
         uint8 tokenDecimals = token == address(0)
+        // tentary opreator used here
+        // else
+        // call the ecr-20 decimals functions
             ? 18
             : IERC20Metadata(token).decimals();
 
+        // here we scale to common
         // Normalize to 18-decimals USD:
         // amount (tokenDecimals) * price (priceDecimals) / 10^(tokenDecimals + priceDecimals) * 10^18
         uint256 usd18 = (amount * price * 10**18) / (10**tokenDecimals * 10**priceDecimals);
         return usd18;
     }
 
+    // this is a getter function that returns list of address that are temporary
     function getSupportedTokens() external view returns (address[] memory) {
         return supportedTokens;
     }
 
+    // this is a setter function that sets the price-feed of ETH
+
     function setEthPriceFeed(address priceFeed) external onlyOwner {
+        // set the pricefeed as a mapping with address zero as the key
         priceFeeds[address(0)] = priceFeed;
     }
 }
 
-// ============================================================================
-// SWAP MANAGER (ETH→WETH, minOut from USD18)
-// ============================================================================
+
+// contract for swap managers
 
 contract SwapManager {
     using SafeERC20 for IERC20;
 
+    // interface for uniswap router
+    // interface IswapRouter will hold the daddress of a contract that implements the interface
     ISwapRouter public immutable swapRouter;
+    // interface for wrapped ETHer 
+    // this variable will hold the address of a contract that implement the WETH interface
     IWETH public immutable weth;
+    // address for the stablecoin
     address public immutable stablecoin;
+    // address for the game contract
     address public immutable gameContract;
+    // this is the UNiswap fee and its tiered this is 0,3%
     uint24 public constant poolFee = 3000;
 
+    // the priceManager varaiable will hold the address of PriceFeedmanager
     PriceFeedManager public priceFeedManager;
 
+    // this invent will take in the token its amount and amount to be swapped out
     event TokenSwapped(address indexed tokenIn, uint256 amountIn, uint256 amountOut);
 
+    // modifiers are reusable piece of logic that can be attached to fucntions
+    // it runs before the function body executes
+    // it checks if the msg.sender equals to gamecontract
+    // _; is a place holder if its passes the rest of the body exceutes
     modifier onlyGame() {
         require(msg.sender == gameContract, "Only game contract");
         _;
     }
 
+    // initialize the state varaibles
     constructor(
         address _swapRouter,
         address _weth,
@@ -208,22 +279,39 @@ contract SwapManager {
         gameContract = _gameContract;
     }
 
+    // swap to stable function will tak in the address of the token and amount 
+    // marked payable to recieve ETH/ wETH
+    // only game only this contract have acces to this.
+
     function swapToStable(address tokenIn, uint256 amountIn)
         external
         payable
         onlyGame
         returns (uint256 amountOut)
     {
+
+        // check if tokenIn is a stable or not to avoid wasting gas fees 
         if (tokenIn == stablecoin) {
+            // return the amount 
             return amountIn;
         }
-
+        // here we calculate the minimum amout that should be acceptable otherwise revert
         uint256 minAmountOut = _calculateMinAmountOut(tokenIn, amountIn);
 
+        // here is tokenIn is native ETH then
         if (tokenIn == address(0)) {
-            // Wrap ETH to WETH
+            // from weth call the deposit and pass the amount
+            // and swap the weth to eth
+
             weth.deposit{value: amountIn}();
+            
+            // call the weth erc20 approve function and allow the contract to spend amount in
             weth.approve(address(swapRouter), amountIn);
+
+            // IswapRouter.ExactInputSingleParams is the uniswap V3 router interface
+            // memeory we are storing it tempo storage
+
+            // params is the local variable it will hold all the importants inputs
 
             ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
                 tokenIn: address(weth),
@@ -235,8 +323,15 @@ contract SwapManager {
                 sqrtPriceLimitX96: 0
             });
 
+        // swapRouter is a state variable that holds the address of the router
+        // pass in the params
             amountOut = swapRouter.exactInputSingle(params);
         } else {
+            // if is not native ETH then use the metadata for erc20 for it
+
+            // using safeApprove force it to accept the router address and amountIn
+            // while taking in the token address
+
             IERC20(tokenIn).forceApprove(address(swapRouter), amountIn);
 
             ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
@@ -256,72 +351,129 @@ contract SwapManager {
         return amountOut;
     }
 
-    // usdValue18 -> stableDecimals with 1% slippage
+    // using 1% slippage buffer
+    // this is also a private function
     function _calculateMinAmountOut(address tokenIn, uint256 amountIn)
         internal
         view
         returns (uint256)
     {
+        // from contract PricFeedManager getusdValue and pass in token address and amount
+        // 
         uint256 usdValue18 = priceFeedManager.getUsdValue(tokenIn, amountIn);
+
+        // get the decimals of the stable token from Ierc-20 metadata
         uint8 stableDecimals = IERC20Metadata(stablecoin).decimals();
 
+
+        // calculate the mininumOut 
+        // normalizing the decimal placements
         uint256 minAmountOut = (usdValue18 * 99 * 10**stableDecimals) / (100 * 10**18);
         return minAmountOut;
     }
 
+    // this is a special fall back function 
+    // it allows the contract to receive ETH directly
     receive() external payable {}
 }
 
 
-
+// automating the stake pool
 contract AutomatedStakePool is ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
 
+    // address of the stablecoin is immutable
     address public immutable stablecoin;
+
+    // address of the contract is imutable too
     address public immutable gameContract;
 
+    // mapping of matchId to Stale Balances
     mapping(uint256 => uint256) public matchStableBalances;
 
+    // protocol fee is 2%
     uint256 public protocolFeePercent = 2;
+
+    // total fee accumulated so far
     uint256 public accumulatedFees;
 
+    // events that handles
+
+    // stable deposited 
+    // stable withdrawn
+    // fees withdrawn
     event StableDeposited(uint256 indexed matchId, address indexed player, uint256 amount);
     event StableWithdrawn(uint256 indexed matchId, address indexed recipient, uint256 amount);
     event FeesWithdrawn(address indexed recipient, uint256 amount);
+
+    // modifier are reusable piece of logic that can be attached to fucntions
+    // they can run before the fucntion body run
 
     modifier onlyGame() {
         require(msg.sender == gameContract, "Only game contract");
         _;
     }
 
+    // the constructor takes in stablecoin address and game contract address
+    // it will inherit ownable and deployers address is passed in
+
     constructor(address _stablecoin, address _gameContract) Ownable(msg.sender) {
         stablecoin = _stablecoin;
         gameContract = _gameContract;
     }
 
+    // is used to deposit stables into the game
+    // it takes in the matchId and amount of stables deposited
+    // onlygame modifier is attached making sure only the game contract can call it
+
     function depositStable(uint256 matchId, uint256 amount) external onlyGame {
+
+        // this will update the mapping of the balance by adding the deposited stables
         matchStableBalances[matchId] += amount;
+
+        // and this will emit for external dapp
         emit StableDeposited(matchId, msg.sender, amount);
     }
 
+    // function to withdraw 
+
+// to withdraw we need the Matchid input, recipient and amount
+// has a modifier attached to
+// has re-entrancy guard 
     function withdraw(
         uint256 matchId,
         address recipient,
         uint256 amount
     ) external onlyGame nonReentrant returns (uint256 payout) {
+        // it is required to check if the mapping of matchststablesbalance 
+        // with matchid as key is greater than amount or equals to the amount
+
         require(matchStableBalances[matchId] >= amount, "Insufficient balance");
+
+        // deduct the match winnings from the matchBalances
         matchStableBalances[matchId] -= amount;
 
+        // calculate the protocol fees 
         uint256 fee = (amount * protocolFeePercent) / 100;
+
+        // payout for the winner
         payout = amount - fee;
 
+
+        // total accumulated fees 
         accumulatedFees += fee;
 
+        // then use safe transfer to handle the payout
         IERC20(stablecoin).safeTransfer(recipient, payout);
 
+        // broadcasts the withdrawal on chain
         emit StableWithdrawn(matchId, recipient, payout);
+
+        // returns the winners payout
         return payout;
     }
+
+// fucntion handling refund
 
     function refund(
         uint256 matchId,
@@ -336,54 +488,86 @@ contract AutomatedStakePool is ReentrancyGuard, Ownable {
         emit StableWithdrawn(matchId, recipient, amount);
     }
 
+// only owner could withdraw fees 
+// uses re-entracy guard
     function withdrawFees() external onlyOwner nonReentrant {
+        // fees is the total accumulated fees
         uint256 fees = accumulatedFees;
+        // fees must be greater than 0
         require(fees > 0, "No fees");
+
+        // withdraw all at once that why it could be set to 0
         accumulatedFees = 0;
 
+        // then using safe transfer to handle the error
         IERC20(stablecoin).safeTransfer(owner(), fees);
 
         emit FeesWithdrawn(owner(), fees);
     }
 }
 
+// the vrf consumer contract 
 
 contract VRFConsumer is VRFConsumerBaseV2Plus {
+    // co-ordinator will hold the functions of IVRFCoordinatorV2PLus
     IVRFCoordinatorV2Plus immutable COORDINATOR;
 
+    //
+     
     uint256 public subscriptionId;
     bytes32 public keyHash;
     uint32 public callbackGasLimit = 200000;
     uint16 public requestConfirmations = 3;
     uint32 public numWords = 1;
 
+
+    // mapping of requestId to MatchId
     mapping(uint256 => uint256) public requestIdToMatchId;
+
+    // mapping of MatchId to RandomNumber
     mapping(uint256 => uint256) public matchIdToRandomNumber;
 
+    // state varaible called gamecontracts
     address public gameContract;
 
+    // triggred when we request randomness
     event RandomnessRequested(uint256 indexed matchId, uint256 requestId);
+
+    // triggred when we fufil randomness
     event RandomnessFulfilled(uint256 indexed matchId, uint256 randomNumber);
 
     constructor(
+        // takes in this
         uint256 _subscriptionId,
         address _vrfCoordinator,
         bytes32 _keyHash
     ) VRFConsumerBaseV2Plus(_vrfCoordinator) {
+        // pass them out 
         COORDINATOR = IVRFCoordinatorV2Plus(_vrfCoordinator);
         subscriptionId = _subscriptionId;
         keyHash = _keyHash;
     }
 
+
+// pass in the game contract address
     function setGameContract(address _gameContract) external {
+        // its is required to check if the game contract is address(0) or not
         require(gameContract == address(0), "Already set");
+
+        // hence pass the holds the deployed contract address
         gameContract = _gameContract;
     }
 
+// fucntion to request random words 
     function requestRandomWords(uint256 matchId) external returns (uint256) {
+
+        // required that the senders address is the game contract
         require(msg.sender == gameContract, "Only game contract");
 
+// from the immutable state varaibale pick the requestRandomwords
         uint256 requestId = COORDINATOR.requestRandomWords(
+            // VRFV2PLus help us format request and reponses
+
             VRFV2PlusClient.RandomWordsRequest({
                 keyHash: keyHash,
                 subId: subscriptionId,
@@ -396,30 +580,44 @@ contract VRFConsumer is VRFConsumerBaseV2Plus {
             })
         );
 
+        // set the mapping with requestId as key to be matchId
         requestIdToMatchId[requestId] = matchId;
 
+        // emeit the event
         emit RandomnessRequested(matchId, requestId);
         return requestId;
     }
 
+
+    // this is the function for fufilRandom words
+    // 
     function fulfillRandomWords(uint256 requestId, uint256[] calldata randomWords)
         internal
         override
     {
+        // this is a mapping of requestId to MatchId with requestid as the key
         uint256 matchId = requestIdToMatchId[requestId];
+
+        // create a variable matchId of type unit256
+
+        // the first random number returned will be stored in the mapping
         matchIdToRandomNumber[matchId] = randomWords[0];
+
+        // emit allows us to track this matchid and first random word
 
         emit RandomnessFulfilled(matchId, randomWords[0]);
 
+        // this call into the game contract and pass in the matchId and first random words
         ITicTacToeGame(gameContract).handleVRFFulfillment(matchId, randomWords[0]);
     }
 }
 
-
-
+// this is gasless Relayer it inherit ownble
 contract GaslessRelayer is Ownable {
+    // extending the capabilities of erc20 with safe-erc20
     using SafeERC20 for IERC20;
 
+    // stablecoin address is immutable
     address public immutable stablecoin;
     PriceFeedManager public priceFeedManager;
 
