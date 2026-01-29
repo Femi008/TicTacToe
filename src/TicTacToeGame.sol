@@ -1,3 +1,4 @@
+
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
@@ -619,91 +620,254 @@ contract GaslessRelayer is Ownable {
 
     // stablecoin address is immutable
     address public immutable stablecoin;
+
+    // this state variable will hold the address of pricefeedmanager
     PriceFeedManager public priceFeedManager;
 
+    //mapping ofaddress to amount of sponsored gas
     mapping(address => uint256) public sponsoredGasPool;
 
+
+    // gas sponsored event takes in indexed sponsor and amount
     event GasSponsored(address indexed sponsor, uint256 amount);
+
+    // gas used takes in indexed user and gas used and gas cost
     event GasUsed(address indexed user, uint256 gasUsed, uint256 gasCost);
 
+    // Proceds batch withdrawals event takes in total successful and failed
+    event BatchProcessed(uint256 total, uint256 successful, uint256 failed);
+
+    // constrcutor initailize the stablecoin and pricfeedmanager address
     constructor(address _stablecoin, address _priceFeedManager) Ownable(msg.sender) {
         stablecoin = _stablecoin;
         priceFeedManager = PriceFeedManager(_priceFeedManager);
     }
 
+    // sponsored gas takes in amount, the visibility is external
+
     function sponsorGas(uint256 amount) external {
+
+        // safe transfer is used here
         IERC20(stablecoin).safeTransferFrom(msg.sender, address(this), amount);
+
+        // amount is added to the mapping of sponsoredgas pool with msg.sender as the key
         sponsoredGasPool[msg.sender] += amount;
+
+        // emit the event 
         emit GasSponsored(msg.sender, amount);
     }
+
+    /// execute takes in game contract addrress, the matchId , the reciever address 
+    // visibility is external 
+    // can be called only by owner
 
     function executeWithdrawal(
         address gameContract,
         uint256 matchId,
         address recipient
-    ) external onlyOwner returns (uint256 gasCost) {
-        uint256 gasStart = gasleft();
+    ) external onlyOwner {
 
+        // this is a  solidity op-code helper that caputures amount of gas left at the point of 
+        // execution
+        // amount of gas left before the withdrawal function is called
+
+        uint256 initialGas = gasleft();
+
+        // from the game contract interface then use the execeute gasless withdrawal function
         ITicTacToeGame(gameContract).executeGaslessWithdrawal(matchId, recipient);
 
-        uint256 gasUsed = gasStart - gasleft() + 21000;
-        gasCost = gasUsed * tx.gasprice;
+    // +21000  is the intrinsic base cost fo any etherum transaction
+    // +9700 adds buffers for the cost of calldata and extra opcodes
 
-        uint256 gasCostInStable = _convertEthToStable(gasCost);
-        require(sponsoredGasPool[recipient] >= gasCostInStable, "Insufficient gas pool");
+    // gasLeft is how manny gas is left after the withdrawal fucntion is executed 
 
-        sponsoredGasPool[recipient] -= gasCostInStable;
+        uint256 gasUsed = initialGas - gasleft() + 21000 + 9700; 
 
-        emit GasUsed(recipient, gasUsed, gasCostInStable);
+    // tx.gasprice is a global variable that return price of gas in wei
+    // for transacion being executed
+
+        uint256 gasPrice = tx.gasprice;
+
+        // this gives total cost for the transaction in eth
+
+        uint256 totalGasCostInEth = gasUsed * gasPrice;
+
+    // here we convert the eth gas cost to stabel coin value 
+        uint256 totalGasCostInStable = _convertEthToStable(totalGasCostInEth);
+
+    // here the mapping of sponsored gas pool with recipient as the key must be 
+    // greater than or equals to total gas cost
+
+        require(
+            sponsoredGasPool[recipient] >= totalGasCostInStable,
+            "Insufficient sponsored gas"
+        );
+
+        // deduct the stable cost from the sponsored gas pool
+
+        sponsoredGasPool[recipient] -= totalGasCostInStable;
+
+
+        // here we emit the gas used event
+        emit GasUsed(recipient, gasUsed, totalGasCostInStable);
     }
 
+
+    // this is for batch withdrawals
+
+    // it takes in game contract
+    // list if ids 
+    // list of recipients addresses
+    // only owner could call it
+
+    function executeBatchWithdrawals(
+    address gameContract,
+    uint256[] calldata matchIds,
+    address[] calldata recipients
+) external onlyOwner {
+
+    // it is required to check if their count matches
+
+    require(matchIds.length == recipients.length, "Mismatched arrays");
+
+    // numvber of succesful withdrawals 
+    uint256 successful = 0;
+
+    // number of failed withdrawals
+    uint256 failed = 0;
+
+    // loop through the requested match ids
+    for (uint256 i = 0; i < matchIds.length; i++) {
+
+        // check if its address (0) then it fails and increment failed
+        if (recipients[i] == address(0)) {
+            failed++;
+            // then move to the net request
+            continue;
+        }
+
+        // try make us call external fucntions safely
+        // if it succed it runs inside the try
+        // it it fails it runs in the catch
+        // this is current contract instance
+        
+
+        // so only add the ones that are successful
+        // also increment the succesful withrawals
+        // if catch then increase the failed too
+
+        try this.executeWithdrawal(gameContract, matchIds[i], recipients[i]) {
+            successful++;
+        } catch {
+            failed++;
+        }
+    }
+    // emit event batch processed
+    emit BatchProcessed(matchIds.length, successful, failed);
+}
+
     function _convertEthToStable(uint256 ethAmount) internal view returns (uint256) {
-        // USD in 18 decimals
+        // get usd value in 18 decimals 
+        // from the state variable pricefeedmanager call getusdvalue 
+        // and pass in the arguments 
         uint256 usd18 = priceFeedManager.getUsdValue(address(0), ethAmount);
+
+        // using metdata of erc20 get the decimal of the address stablecoin
         uint8 stableDecimals = IERC20Metadata(stablecoin).decimals();
 
-        // USD(18) -> stable(decimals)
+        // then normalize the stable deimals 
         return (usd18 * 10**stableDecimals) / 10**18;
     }
 }
 
 
+/// the contract for the tic tac toe game
+// the contract will inherit IticTactoe, reentrancyguard and ownable
 
 contract TicTacToeGame is ITicTacToeGame, ReentrancyGuard, Ownable {
+
+    // using safe erc-20 to handle the error that dont return boolean
+
     using SafeERC20 for IERC20;
 
     uint256 public constant MIN_PLAYERS = 2;
     uint256 public constant MAX_PLAYERS = 2; // Enforce 2 players
     uint256 public constant MAX_ROUNDS = 5;
-    uint256 public constant MOVE_TIMEOUT = 120;
-    uint256 public constant MIN_STAKE_USD = 10 * 10**6; // e.g., USDC 6 decimals
-    uint256 public constant AUTO_REFUND_DELAY = 7 days;
+    uint256 public constant MOVE_TIMEOUT = 120; // 2 * 60 secs
+    uint256 public constant MIN_STAKE_USD = 1 * 10**6; // e.g., USDC 6 decimals i.e $1
+    uint256 public constant AUTO_REFUND_DELAY = 1 days; // 24 hrs is enough for refund
 
+    //  this variable will hold the address of the AutomatedStakPool
     AutomatedStakePool public stakePool;
+
+    // this variable will hold the address of the VRFCOnsumer
     VRFConsumer public vrfConsumer;
+
+    // this variable will hold the address of the PriceFeedManager
     PriceFeedManager public priceFeedManager;
+
+    // this variable will hold the address of the swapManager
     SwapManager public swapManager;
+
+    // this variable will hold the address of the gaslessRelayer
     GaslessRelayer public gaslessRelayer;
 
+    // this is the immutable address of the stablecoin
     address public immutable stablecoin;
+
+    // this is the immutable address of the weth
     address public immutable weth;
 
+    // match counter to generate unique match IDs
     uint256 public matchCounter;
+
+    // mapping of Ids to Matches 
     mapping(uint256 => Match) public matches;
+
+    // mapping of matchId (to a mapping of player address to boolean)
     mapping(uint256 => mapping(address => bool)) public hasJoined;
 
+    // this should be able to track maych created 
     event MatchCreated(uint256 indexed matchId);
+
+    // player that joined the game should have Id that is indexed
+    // an indexed address and amount of stable deposited 
+
     event PlayerJoined(uint256 indexed matchId, address indexed player, uint256 stableAmount);
+
+    // this will trcak the time the game started
     event GameStarted(uint256 indexed matchId);
+
+    // this will track the first starter 
     event StarterSelected(uint256 indexed matchId, address indexed starter);
+
+    // this will track the move made by player on the board
+
     event MoveMade(uint256 indexed matchId, address indexed player, uint8 x, uint8 y);
+
+    // this will track the round won note we have 5 of them
     event RoundWon(uint256 indexed matchId, uint8 round, address indexed winner);
+
+    // this will track the number of draws in each round
     event RoundDraw(uint256 indexed matchId, uint8 round);
+
+    // this will track the winer selected 
     event WinnerSelected(uint256 indexed matchId, address indexed winner, uint256 totalAmount);
+
+    // this will track the number of cancellation of match
     event MatchCancelled(uint256 indexed matchId);
+
+    // this will track the prize withdrawn by the player
     event PrizeWithdrawn(uint256 indexed matchId, address indexed player, uint256 amount);
+
+    // this will track the auto refunds
     event AutoRefundExecuted(uint256 indexed matchId);
+
+    // this will track the timeout for each player
     event PlayerTimedOut(uint256 indexed matchId, address indexed player);
+
+// this is the constructor for the tic tac toe game
+// pass in the address of the 5 of the them
 
     constructor(
         address _vrfConsumer,
@@ -713,72 +877,161 @@ contract TicTacToeGame is ITicTacToeGame, ReentrancyGuard, Ownable {
         address _swapRouter,
         address _weth
     ) Ownable(msg.sender) {
+
+        // stabelcoin address pass in the contructor
         stablecoin = _stablecoin;
+
+        // the wrapped eth address passed in the constrcutor
         weth = _weth;
 
+        // deploy fresh new instance of AutomatedStakePool and return its addresss
+        // and store it in stakepoool and swapmanger respectively
+
+        // address of the current contract and stabelcoin address
+
+
+        // the reason is because we dont want to hold refrence to already deployed contract
+
         stakePool = new AutomatedStakePool(_stablecoin, address(this));
+
+        // 
         swapManager = new SwapManager(_swapRouter, _weth, _stablecoin, _priceFeedManager, address(this));
 
+
+        // here we jsut intialize the vrfconsumer pricefeedmanager and gasless relayer
         vrfConsumer = VRFConsumer(_vrfConsumer);
         priceFeedManager = PriceFeedManager(_priceFeedManager);
         gaslessRelayer = GaslessRelayer(_gaslessRelayer);
     }
 
+    // function ttracks how many matches have been created
 
     function createMatch() external returns (uint256) {
+
+        // tracks how many matches has been created
         matchCounter++;
+
+        // state variable matchId that stores how many matches has been created so far
         uint256 matchId = matchCounter;
 
+        // matchId maps eachs id to match
+        // with key value matchId stored permanantly in he blockchain with variable m
+
+        // any change on m will be refelcted on matches[matchid]
         Match storage m = matches[matchId];
+
+    // this will start the game session
         m.state = GameState.OPEN;
+
+        // record time of creation
         m.createdAt = block.timestamp;
+
+        // this is 24hrs timeframe for auto refund
         m.autoRefundTime = block.timestamp + AUTO_REFUND_DELAY;
 
+        // emit the match created event 
         emit MatchCreated(matchId);
+
+        // retur the matchId
         return matchId;
     }
 
+      // this is to join the game with ETH i.e native ETH
+
+      // there is re-enetrancy guard attached and payable to recieve ETH
     function joinGameWithETH(uint256 matchId) external payable nonReentrant {
+
+        // this is a private fucntion that recieves 
+        // matchId, native eth address and its value worth in wei
         _joinGame(matchId, address(0), msg.value);
     }
+
+    // this is to join the game with ERC20 tokens
+    // re-entrancy is attached and its has external visibility
 
     function joinGameWithToken(uint256 matchId, address token, uint256 amount)
         external
         nonReentrant
     {
+        // it is required to check if the token is valid and not address(0)
+        // i.e 0x000000
+
         require(token != address(0), "Use joinGameWithETH for ETH");
+
+        // use safe token transfer from to handle the error that doesnt
+        // return boolean 
+        // safe transfer from will take in the token address, msg.sender address and amount
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+
+        // this is the private function that will handle the joining of the game
+        // takes in matchId, erc20 token address and amount
         _joinGame(matchId, token, amount);
     }
 
+
+    // this will handle the joinning of the game
+
     function _joinGame(uint256 matchId, address token, uint256 amount) internal {
+
+        // this is a storage variable m that will hold the match mapping of matchId to match
+        
         Match storage m = matches[matchId];
 
+        // it is required that that match state of the mapping is open
+
         require(m.state == GameState.OPEN, "Match not open");
+
+        // check if the token is supported
         require(priceFeedManager.isTokenSupported(token), "Token not supported");
+
+        // player must not have joined before
         require(!hasJoined[matchId][msg.sender], "Already joined");
+
+        // check if the match is full, which the max is 2 players
         require(m.players.length < MAX_PLAYERS, "Match full");
 
+    // stable amount
         uint256 stableAmount;
-
+        // if the token is stablecoin then no need to swap
         if (token == stablecoin) {
             stableAmount = amount;
         } else {
+            // if it is not invalid then
             if (token != address(0)) {
+                // use safetransfer to move the token to swapmanager
                 IERC20(token).safeTransfer(address(swapManager), amount);
             }
 
+            // if it is the native eth address then
             if (token == address(0)) {
+                
+                // this will call swap to stable and pass in the value
+                // (token, amount) is the usaual arguments passed
+                // {value: amount} is the value in wei
                 stableAmount = swapManager.swapToStable{value: amount}(token, amount);
             } else {
                 stableAmount = swapManager.swapToStable(token, amount);
             }
         }
 
+        // if the stable amount is less than $1 then revert
         require(stableAmount >= MIN_STAKE_USD, "Stake too low");
 
+
+    // firstly set allowance to 0 then force approve the stake pool to spend the stable amount
         IERC20(stablecoin).forceApprove(address(stakePool), stableAmount);
+
+        // dont forget the stakepool is the new contract deployed for autostakepool and we call 
+        // deposit the player stake into a pool
         stakePool.depositStable(matchId, stableAmount);
+
+
+        // since the m is set to be Match
+        // then add new match to the Player array
+        // jsut updating one field 
+
+        // m is a refrence to matches[matchId]
+        // let m add a new player to the players array
 
         m.players.push(Player({
             addr: msg.sender,
@@ -787,139 +1040,292 @@ contract TicTacToeGame is ITicTacToeGame, ReentrancyGuard, Ownable {
             withdrawn: false
         }));
 
+        // update the total stable amount in the match
         m.totalStableAmount += stableAmount;
+        
+        // checks if player has joined
         hasJoined[matchId][msg.sender] = true;
 
+        // emit the player joined event
         emit PlayerJoined(matchId, msg.sender, stableAmount);
 
+    // check the minimum player to start the game 
+    // must be greater than or equals to min players
         if (m.players.length >= MIN_PLAYERS) {
+
+            // set he game state from Open to Staked
             m.state = GameState.STAKED;
         }
     }
 
+    // start game visibility is external
+
     function startGame(uint256 matchId) external {
+
+        // m is a storage variable that holds the mapping of matchId to match
         Match storage m = matches[matchId];
 
+    // it is required to check if the match state is staked
         require(m.state == GameState.STAKED, "Not ready");
+
+        // check if the msg.sender is one of the players
         require(m.players.length >= MIN_PLAYERS, "Not enough players");
 
+        // this state means its waiting for vrf response 
+        // from the onchain co-ordinator
+
         m.state = GameState.VRF_PENDING;
+
+        // from chainLink then request random word[1] in this case
         vrfConsumer.requestRandomWords(matchId);
 
+        // then track with gate game started event
         emit GameStarted(matchId);
     }
 
+    
+    // this function is use to pass the call back
+    // visibility is external 
+    // takes in matchId and random number
+    
     function handleVRFFulfillment(uint256 matchId, uint256 randomNumber) external {
+
+        // checks if the senders address is the brf deployed address
+        // its a security check
         require(msg.sender == address(vrfConsumer), "Only VRF");
 
+        // m is a storage variable that holds the mapping of matchId to match
         Match storage m = matches[matchId];
+
+        // its is required to check if the match state is vrf pending
         require(m.state == GameState.VRF_PENDING, "Invalid state");
 
+        // select starter based on random number
         m.starterIndex = uint8(randomNumber % m.players.length);
+
+        // set the game to in progress
         m.state = GameState.IN_PROGRESS;
+
+        // set the game round to 1
         m.currentRound = 1;
 
+        // initialize the board for the first round
         _initializeBoard(matchId);
+
+        // set the current player index to starter index
         m.currentPlayerIndex = m.starterIndex;
+
+        // record the last move time
+        // useful for timeout mechanism
         m.lastMoveTime = block.timestamp;
 
+        // emit the starter selected event
+        // pass in the mathId and the player that started the game
         emit StarterSelected(matchId, m.players[m.starterIndex].addr);
     }
 
    
-
+   // function to make a move on the board
+   // visibility is external
+    // where x and y are co-ordinates on the board
+    
     function makeMove(uint256 matchId, uint8 x, uint8 y) external {
         Match storage m = matches[matchId];
-
+    
+    // it is required to check if the game state is in progress
         require(m.state == GameState.IN_PROGRESS, "Game not active");
+
+        // this maps the active co-ordinate 0,1,2
         require(x < 3 && y < 3, "Invalid position");
+
+        // check if the cell is empty
         require(m.currentBoard.cells[x][y] == CellState.EMPTY, "Cell occupied");
+
+        // check if its the players turn
         require(m.players[m.currentPlayerIndex].addr == msg.sender, "Not your turn");
+
+        // check for move timeout if player dont play on time
         require(block.timestamp - m.lastMoveTime <= MOVE_TIMEOUT, "Move timeout");
 
+        // using tentary opreator if the value is (0) then set
+        // to the first player o/w secod player
+
         CellState playerCell = m.currentPlayerIndex == 0 ? CellState.PLAYER1 : CellState.PLAYER2;
+
+        // 3x3 board-player Cell update current Player 
+
+        // we pass currentboard into the Board which
+        // itself is a struct
+        // playerCell is a varaiale that holds the current board position
         m.currentBoard.cells[x][y] = playerCell;
+
+        // this tracks the move count on the board
+        // total move count should be 9
         m.currentBoard.moveCount++;
+
+        // record the exact timeStamp of this movement
         m.lastMoveTime = block.timestamp;
 
+
+        // emit the move made event
+        // pass in the matchId, msg.sender, x and y co-ordinates
         emit MoveMade(matchId, msg.sender, x, y);
 
+        // _checkWin check if a player has won after making a move
+        // if true he has won the match
         if (_checkWin(m.currentBoard, playerCell)) {
+
+            // this will increase the win count for the player that won
             m.players[m.currentPlayerIndex].wins++;
+
+            // this emit the matchId, the round ount and sender address
             emit RoundWon(matchId, m.currentRound, msg.sender);
+
+            // advance the ame to the net round
+            // and return to the next round
             _nextRound(matchId);
             return;
         }
 
+
+        // checks if the board has reached a count of 9
         if (m.currentBoard.moveCount == 9) {
+
+            // emits this if its a draw
+            // its takes i the matchId and the round no.
             emit RoundDraw(matchId, m.currentRound);
+
+            // then move to the next round till its 5 
             _nextRound(matchId);
             return;
         }
 
+        // if the round is not over it switch to other player
         m.currentPlayerIndex = (m.currentPlayerIndex + 1) % 2;
     }
 
+    // claim the win of the round
+
     function claimTimeoutWin(uint256 matchId) external {
-        Match storage m = matches[matchId];
+    Match storage m = matches[matchId];
 
-        require(m.state == GameState.IN_PROGRESS, "Game not active");
-        require(block.timestamp - m.lastMoveTime > MOVE_TIMEOUT, "No timeout yet");
+    require(m.state == GameState.IN_PROGRESS, "Game not active");
 
-        uint8 opponentIndex = m.currentPlayerIndex;
-        uint8 winnerIndex = (m.currentPlayerIndex + 1) % 2;
+    // make sure that player length is 2 
+    require(m.players.length == 2, "Invalid match config");
 
-        require(m.players[winnerIndex].addr == msg.sender, "Not eligible");
+    // block.timestamp is a global variabale 
+    // lastmoveTime is the last recorded move time stored in Match Struct
+    require(block.timestamp - m.lastMoveTime > MOVE_TIMEOUT, "No timeout yet");
 
-        m.players[winnerIndex].wins++;
+    // m.currentIndexPlayer is the next player
+   // it alternate if Player(0) plays then index is 1
 
-        emit PlayerTimedOut(matchId, m.players[opponentIndex].addr);
-        emit RoundWon(matchId, m.currentRound, msg.sender);
+    uint8 opponentIndex = m.currentPlayerIndex;
 
-        _nextRound(matchId);
-    }
+    // store the player that made the winning move
+   // 
+    uint8 winnerIndex = (m.currentPlayerIndex + 1) % 2;
 
+    require(m.players[winnerIndex].addr == msg.sender, "Not eligible");
+
+    // Prevent double claiming
+    m.lastMoveTime = block.timestamp;
+
+    // Update wins
+
+    m.players[winnerIndex].wins++;
+
+    // Emit events
+    emit PlayerTimedOut(matchId, m.players[opponentIndex].addr);
+    emit RoundWon(matchId, m.currentRound, msg.sender);
+
+    // Advance round with the winner
+    _nextRound(matchId, winnerIndex);
+}
+
+
+
+// this help us reset the board after a match
     function _initializeBoard(uint256 matchId) internal {
+
+        // m is a pointer to onchain storage 
         Match storage m = matches[matchId];
+
+        // loop over the 9 positions / cells 
         for (uint8 i = 0; i < 3; i++) {
             for (uint8 j = 0; j < 3; j++) {
+
+                // set each cell to empty
                 m.currentBoard.cells[i][j] = CellState.EMPTY;
             }
         }
+
+        // set the move count to (0)
         m.currentBoard.moveCount = 0;
     }
 
-    function _nextRound(uint256 matchId) internal {
-        Match storage m = matches[matchId];
+    // this is a function that advance the game to next round 
+    // or ends the game when the round is completed 
 
-        if (m.currentRound >= MAX_ROUNDS) {
-            _selectWinner(matchId);
-            return;
-        }
+function _nextRound(uint256 matchId, uint8 lastWinnerIndex) internal {
+    Match storage m = matches[matchId];
 
-        m.currentRound++;
-        _initializeBoard(matchId);
-        m.currentPlayerIndex = uint8((m.starterIndex + m.currentRound - 1) % m.players.length);
-        m.lastMoveTime = block.timestamp;
+    // End match if max rounds reached
+    if (m.currentRound >= MAX_ROUNDS) {
+        _selectWinner(matchId);
+        return;
     }
 
+    // Advance round
+    m.currentRound++;
+
+    // Reset board
+    _initializeBoard(matchId);
+
+    // Decide starter
+    if (m.currentRound == 1) {
+        // First round → predefined starter
+        m.currentPlayerIndex = m.starterIndex;
+    } else {
+        // Prevent double advantage
+        if (lastWinnerIndex == m.currentPlayerIndex) {
+            // Winner already started last round → switch player
+            m.currentPlayerIndex =
+                uint8((m.currentPlayerIndex + 1) % m.players.length);
+        } else {
+            // Winner did not start → winner starts
+            m.currentPlayerIndex = lastWinnerIndex;
+        }
+    }
+
+    // Reset move timer
+    m.lastMoveTime = block.timestamp;
+}
+
+
+
     function _checkWin(Board storage board, CellState player) internal view returns (bool) {
+        // this is for the horizontal row
         for (uint8 i = 0; i < 3; i++) {
             if (board.cells[i][0] == player && board.cells[i][1] == player && board.cells[i][2] == player) {
                 return true;
             }
         }
 
+        // for the vertical row 
         for (uint8 j = 0; j < 3; j++) {
             if (board.cells[0][j] == player && board.cells[1][j] == player && board.cells[2][j] == player) {
                 return true;
             }
         }
 
+        // for diagonal top left to bottom right
         if (board.cells[0][0] == player && board.cells[1][1] == player && board.cells[2][2] == player) {
             return true;
         }
 
+        // diagonal top right to top buttom
         if (board.cells[0][2] == player && board.cells[1][1] == player && board.cells[2][0] == player) {
             return true;
         }
