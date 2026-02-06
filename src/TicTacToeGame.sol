@@ -33,16 +33,20 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
 
     // struct is a way to group related items into one composite function
     struct Player {
-        address addr;
-        uint256 stableAmount;
-        uint8 wins;
-        bool withdrawn;
+        address addr; // this is the players address
+        uint256 stableAmount; // the amount of stables deposited
+        uint8 wins; // numbers of wins
+        bool withdrawn; // true or false 
     }
 
     // movecount tracks the movement of the 3x3 board 
     struct Board {
+
+    // this is a two dimensional aray
+    // cellState has 3 elements
+
         CellState[3][3] cells;
-        uint8 moveCount;
+        uint8 moveCount; // numbers of moves made so far
     }
 
     // tracks everything about the match
@@ -58,7 +62,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         uint8 currentPlayerIndex; // maps the position to player0 or player1 or empty
         uint256 lastMoveTime; // records time the last move was made 
         uint256 autoRefundTime; // dealine for refund
-        uint8 lastRoundStarterIndex; // ADD THIS FIELD
+        uint8 lastRoundStarterIndex; // player that started the previous round
 
     }
 
@@ -81,11 +85,17 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             uint160 sqrtPriceLimitX96;
         }
 
-        // here we are passing the struct into the fucntion
         // call data is telling us the function will be passed in from external call
+        // it makes it safer to pass data into external fucntions
+        // the argument name is param
+        // the fucnction is external and also Payable
+
+
         function exactInputSingle(ExactInputSingleParams calldata params)
             external
             payable
+
+            // returns the amount
             returns (uint256 amountOut);
     }
 
@@ -99,34 +109,50 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
 
     // interface defines eternal contracts without implementation
     interface ITicTacToeGame {
+
         // this is the callback fucnction that delivers the random number back to the contract
+
         function handleVRFFulfillment(uint256 matchId, uint256 randomNumber) external;
-        // allows players to withdraw wins without paying for gas fees themselves
+
         function executeGaslessWithdrawal(uint256 matchId, address recipient) external;
+
+        /* @dev
+        allows players to withdraw wins without paying for gas fees themselves
+        but thru a reelayer that accepts Usdt, the goal is to make the gas fee subtracted from the withdrawn amount
+        i will continue to review the best and secure way to make this happen
+        */
     }
 
 
-    // This is the PriceManager controls the price feeds and its inherit ownable
+    // This Contract controls the price feeds also inherit Ownable
     contract PriceFeedManager is Ownable {
+
         // extending the traditional erc-20 functions with SafeErc-20
         using SafeERC20 for IERC20;
         
         // mapping of token address to chainLink address
         mapping(address => address) public priceFeeds;
+
         // a list or array of supported tokens 
         address[] public supportedTokens;
-        // a mapping of supported token address to boolean either true or false
+
+        // a mapping of supported token address to boolean checking if they are 
+        // supported or not
         mapping(address => bool) public isTokenSupported;
         
-        // log events so external dapps can picks it up
+        // log events so external dapps can picks it up TokenAdd and TokenRemoved
+
         event TokenAdded(address indexed token, address indexed priceFeed);
         event TokenRemoved(address indexed token);
 
-        // Ownable inherited is used here and te deployer address is passed into here
+        // Ownable inherited here and the deployers address is passed inside
+
         constructor() Ownable(msg.sender) {
+
             // since Native Eth is not supported then we push Address(0) 
             supportedTokens.push(address(0));
-            // this is to check if native eth is now part of the supported token address
+
+/           // this is to set the address(0) is supported 
             isTokenSupported[address(0)] = true;
         }
 
@@ -134,93 +160,133 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         // only owner could add token to prevent malicious token added to the supported list
 
         function addToken(address token, address priceFeed) external onlyOwner {
-            // it is required to check if the token is suportted where token is the key
+            // check if the token is supported to not
             require(!isTokenSupported[token], "Token already supported");
-            // it is required to check if token is not invalid 
+
             require(priceFeed != address(0), "Invalid price feed");
+
+            /*
+            it is required to check if token is not invalid i.e (0x00000)
+            because its a token and expeted to be erc-20, address (0) will 
+            not be tolerated
+            */
         
-            // here we specify the key to the mapping pricefeeds
+            // here we specify the key to the mapping pricefeeds which is token
             priceFeeds[token] = priceFeed;
+
             // here we push the supported er20 token
             supportedTokens.push(token);
+
             // we double check if its added or not
             isTokenSupported[token] = true;
+
             // we emit the token added for external dapps and front end
             emit TokenAdded(token, priceFeed);
         }
 
     // when we are about to discard token we only need the address and also restricted from everyone
         function removeToken(address token) external onlyOwner {
-            // its is importan to check if its is native ETH, because we cant remove it
+
+            // its is importan to check if its is native ETH, because you cant remove it
             require(token != address(0), "Cannot remove ETH");
-            // here we check if supported token list exist using the key "token"
+
+            // here we check if token exists or not
             require(isTokenSupported[token], "Token not supported");
-        // here we set the confirmed supported token to be false 
+
+           // here we set the supported token to be false 
             isTokenSupported[token] = false;
+
             // we then set the pricefeed to default
             delete priceFeeds[token];
-        // we emit the removal of the token
+
+           // we emit the removal of the token for the front-end
             emit TokenRemoved(token);
         }
 
-    // use for fetching the price of each tokens, it is public and could be accessed by anyone
+        // use for fetching the price of each tokens, it is public and could be accessed by anyone
         function getPrice(address token) public view returns (uint256) {
+
             // it is required to check if the token mapping exist
+            // where token is the key
+
             require(isTokenSupported[token], "Token not supported");
-        // then set price feed mapping to be variable feed with type address
+
+            // then set price feed mapping to be variable feed with type address
             address feed = priceFeeds[token];
+
             // if feed is invalid then stop execution immediately
             require(feed != address(0), "No price feed configured");
 
-        // using a wrapper function, wrap the feed by aggregatorInterface 
-        // and set the variable name to be priceFeed
+            // using a wrapper function, wrap the feed by aggregatorInterface 
+            // and set the variable name to be priceFeed
+
             AggregatorV3Interface priceFeed = AggregatorV3Interface(feed);
+
             // from priceFeed get latetsRound Data and return price and updatedtime
             (, int256 price, , uint256 updatedAt, ) = priceFeed.latestRoundData();
 
-        // check if price > 0 
-        // check if updatedtime > last 1 hr blockstamp
+            // check if price > 0 
+            // check if updatedtime > last 1 hr blockstamp
+
             require(price > 0, "Invalid price");
             require(updatedAt > block.timestamp - 1 hours, "Stale price");
 
             return uint256(price);
         }
 
-        // get the decimals for native eth / erc20- tokens
-        // takes in address and its a view 
+
+
+        /*
+         @dev this fnction gets the decimals for native eth / erc20- tokens
+         takes in address and it can only view
+         */
+
         function getPriceDecimals(address token) public view returns (uint8) {
-            // feed  is a local variable
+
+            // feed  is a local variable of type address
+            // set it to the mapping of the price feeds
             address feed = priceFeeds[token];
 
+            // make sure that feeds is not address(0)
             require(feed != address(0), "No price feed configured");
+
             // return the decimals of the feed inputed into aggregatorV3
             // cast the address into chainlink interface
             return AggregatorV3Interface(feed).decimals();
         }
 
-        // Returns USD value in 18 decimals
-        // getusdvalue takes in token address and amount its public 
+        /*
+        Returns USD value in 18 decimals for uniformity
+        getusdvalue takes in token address and amount its public
+        returns the usd value in 18 decimals
+         */
         function getUsdValue(address token, uint256 amount) public view returns (uint256) {
-            uint256 price = getPrice(token);      // price in priceDecimals
-            //pass in the token address into get decimals function
+
+            uint256 price = getPrice(token);      // price in priceDecimals pass in the token address
+
+            // pass in the token address in to the getPriceDecimals
             uint8 priceDecimals = getPriceDecimals(token);
 
-        // if the token is native ETH return 18 decimals 
-            uint8 tokenDecimals = token == address(0)
-            // tentary opreator used here
-            // else
-            // call the ecr-20 decimals functions
-                ? 18
-                : IERC20Metadata(token).decimals();
+                // if the token is native ETH return 18 decimals 
+                 uint8 tokenDecimals = token == address(0)
 
-            // here we scale to common
-            // Normalize to 18-decimals USD:
-            // amount (tokenDecimals) * price (priceDecimals) / 10^(tokenDecimals + priceDecimals) * 10^18
-            uint256 usd18 = (amount * price * 10**18) / (10**tokenDecimals * 10**priceDecimals);
-            return usd18;
+                // tentary opreator used here
+                // else
+                // call the ecr-20 decimals MetaData
+                    ? 18
+                    : IERC20Metadata(token).decimals();
+
+                /* @dev here we scale to common
+                Normalize to 18-decimals USD:
+                amount (tokenDecimals) * price (priceDecimals) / 10^(tokenDecimals + priceDecimals) * 10^18
+                */
+                uint256 usd18 = (amount * price * 10**18) / (10**tokenDecimals * 10**priceDecimals);
+                return usd18;
         }
 
-        // this is a getter function that returns list of address that are temporary
+        /* this is a getter function that returns list of address that are supported and its stored tempoarily
+        returns the list of address
+        */
         function getSupportedTokens() external view returns (address[] memory) {
             return supportedTokens;
         }
@@ -239,29 +305,36 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
     contract SwapManager {
         using SafeERC20 for IERC20;
 
-        // interface for uniswap router
-        // interface IswapRouter will hold the daddress of a contract that implements the interface
+        /* ISwapRouter is the interface for uniswap router
+        interface IswapRouter will hold the address of a contract that implements the interface */
+
         ISwapRouter public immutable swapRouter;
-        // interface for wrapped ETHer 
-        // this variable will hold the address of a contract that implement the WETH interface
+
+        /* interface for wrapped ETHer 
+        this variable will hold the address of a contract that implement the WETH interface */
+
         IWETH public immutable weth;
+
         // address for the stablecoin
         address public immutable stablecoin;
+
         // address for the game contract
         address public immutable gameContract;
+
         // this is the UNiswap fee and its tiered this is 0,3%
         uint24 public constant poolFee = 3000;
 
         // the priceManager varaiable will hold the address of PriceFeedmanager
         PriceFeedManager public priceFeedManager;
 
-        // this invent will take in the token its amount and amount to be swapped out
+        // this envent will take in the token its amount and amount to be swapped out
         event TokenSwapped(address indexed tokenIn, uint256 amountIn, uint256 amountOut);
 
-        // modifiers are reusable piece of logic that can be attached to fucntions
-        // it runs before the function body executes
-        // it checks if the msg.sender equals to gamecontract
-        // _; is a place holder if its passes the rest of the body exceutes
+            /* modifiers are reusable piece of logic that can be attached to fucntions
+            it runs before the function body executes
+            it checks if the msg.sender equals to gamecontract
+            _; is a place holder if its passes the rest of the body exceutes */
+
         modifier onlyGame() {
             require(msg.sender == gameContract, "Only game contract");
             _;
@@ -282,9 +355,9 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             gameContract = _gameContract;
         }
 
-        // swap to stable function will tak in the address of the token and amount 
-        // marked payable to recieve ETH/ wETH
-        // only game only this contract have acces to this.
+        /* swap to stable function will take in the address of the token and amount 
+        marked payable to recieve ETH/ wETH
+        only game only this contract have acces to this. */
 
         function swapToStable(address tokenIn, uint256 amountIn)
             external
@@ -298,23 +371,24 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
                 // return the amount 
                 return amountIn;
             }
+
             // here we calculate the minimum amout that should be acceptable otherwise revert
             uint256 minAmountOut = _calculateMinAmountOut(tokenIn, amountIn);
 
             // here is tokenIn is native ETH then
             if (tokenIn == address(0)) {
-                // from weth call the deposit and pass the amount
-                // and swap the weth to eth
+
+                /* Call the deposit and pass the amount
+                and swap the weth to eth */
 
                 weth.deposit{value: amountIn}();
                 
-                // call the weth erc20 approve function and allow the contract to spend amount in
+                // call the weth erc20 approve the router and allow the contract to spend X amount
                 weth.approve(address(swapRouter), amountIn);
 
-                // IswapRouter.ExactInputSingleParams is the uniswap V3 router interface
-                // memeory we are storing it tempo storage
-
-                // params is the local variable it will hold all the importants inputs
+                /* IswapRouter.ExactInputSingleParams is the uniswap V3 router interface
+                memeory we are storing it tempo storage
+                params is the local variable it will hold all the importants inputs */
 
                 ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
                     tokenIn: address(weth),
@@ -326,14 +400,15 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
                     sqrtPriceLimitX96: 0
                 });
 
-            // swapRouter is a state variable that holds the address of the router
-            // pass in the params
+            /* swapRouter is a state variable that holds the address of IswapRouter
+            pass in the params, where params is the state variable name */
+
                 amountOut = swapRouter.exactInputSingle(params);
             } else {
-                // if is not native ETH then use the metadata for erc20 for it
 
-                // using safeApprove force it to accept the router address and amountIn
-                // while taking in the token address
+                /* if is not native ETH then use the metadata for erc20 for it
+                   using safeApprove force which is the equivalent of approve it to accept the router address and amountIn
+                   while taking in the token address */
 
                 IERC20(tokenIn).forceApprove(address(swapRouter), amountIn);
 
@@ -354,44 +429,50 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             return amountOut;
         }
 
-        // using 1% slippage buffer
-        // this is also a private function
+        // this is a private function that is meant to be used internally
+
         function _calculateMinAmountOut(address tokenIn, uint256 amountIn)
             internal
             view
             returns (uint256)
         {
-            // from contract PricFeedManager getusdValue and pass in token address and amount
-            // 
+            /* from contract PricFeedManager getusdValue and pass in token address and amount
+            then call the variable usdValue18 */
+
             uint256 usdValue18 = priceFeedManager.getUsdValue(tokenIn, amountIn);
 
-            // get the decimals of the stable token from Ierc-20 metadata
+            /* get the decimals of the stable token from Ierc-20 metadata 
+             and call it Stabledecimals */
+             
             uint8 stableDecimals = IERC20Metadata(stablecoin).decimals();
 
 
-            // calculate the mininumOut 
-            // normalizing the decimal placements
+            // calculate the mininumOut while ormalizing the decimal placements
             uint256 minAmountOut = (usdValue18 * 99 * 10**stableDecimals) / (100 * 10**18);
+
+            // return the minimum amount that is acceptable o/w revert
             return minAmountOut;
         }
 
-        // this is a special fall back function 
-        // it allows the contract to receive ETH directly
+        /* this is a special fall back function 
+        it allows the contract to receive ETH directly */
         receive() external payable {}
     }
 
 
     // automating the stake pool
     contract AutomatedStakePool is ReentrancyGuard, Ownable {
+
+        // extending erc-20 capabilities to handle some tokens that does not return boolean
         using SafeERC20 for IERC20;
 
         // address of the stablecoin is immutable
         address public immutable stablecoin;
 
-        // address of the contract is imutable too
+        // address of the game-contract is imutable 
         address public immutable gameContract;
 
-        // mapping of matchId to Stale Balances
+        // mapping of matchId to Stables Balances
         mapping(uint256 => uint256) public matchStableBalances;
 
         // protocol fee is 2%
@@ -400,35 +481,45 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         // total fee accumulated so far
         uint256 public accumulatedFees;
 
-        // events that handles
+        /*
+           events that handles
+           stable deposited 
+           stable withdrawn
+           fees withdrawn 
+           so external dapp could pick them up 
+           
+        */
 
-        // stable deposited 
-        // stable withdrawn
-        // fees withdrawn
         event StableDeposited(uint256 indexed matchId, address indexed player, uint256 amount);
         event StableWithdrawn(uint256 indexed matchId, address indexed recipient, uint256 amount);
         event FeesWithdrawn(address indexed recipient, uint256 amount);
 
-        // modifier are reusable piece of logic that can be attached to fucntions
-        // they can run before the fucntion body run
+        /* 
+         modifier are reusable piece of logic that can be attached to fucntions
+         they can run before the fucntion body run
+         the goal here is to check if the game-contract is also the senders address
+        */
 
         modifier onlyGame() {
             require(msg.sender == gameContract, "Only game contract");
             _;
         }
 
-        // the constructor takes in stablecoin address and game contract address
-        // it will inherit ownable and deployers address is passed in
+        /* the constructor takes in stablecoin address and game contract address
+        it will inherit ownable and the deployers address is passed in as the owner */
 
         constructor(address _stablecoin, address _gameContract) Ownable(msg.sender) {
             stablecoin = _stablecoin;
             gameContract = _gameContract;
         }
 
-        // is used to deposit stables into the game
-        // it takes in the matchId and amount of stables deposited
-        // onlygame modifier is attached making sure only the game contract can call it
 
+        /* 
+           is used to deposit stables into the game
+           it takes in the matchId and amount of stables deposited
+           onlygame modifier is attached making sure only the game contract can call it
+
+        */
         function depositStable(uint256 matchId, uint256 amount) external onlyGame {
 
             // this will update the mapping of the balance by adding the deposited stables
@@ -438,18 +529,26 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             emit StableDeposited(matchId, msg.sender, amount);
         }
 
-        // function to withdraw 
+       
 
-    // to withdraw we need the Matchid input, recipient and amount
-    // has a modifier attached to
-    // has re-entrancy guard 
+        /*
+           to withdraw we need the following inputs matchId, recipient and amount
+           has a modifier attached to
+           has re-entrancy guard 
+        */
+
         function withdraw(
             uint256 matchId,
             address recipient,
             uint256 amount
         ) external onlyGame nonReentrant returns (uint256 payout) {
-            // it is required to check if the mapping of matchststablesbalance 
-            // with matchid as key is greater than amount or equals to the amount
+
+            /* 
+               it is required to check if the mapping of matchststablesbalance 
+               with matchid as key is greater than amount or equals to the amount
+               else insufficent Balance
+                
+            */
 
             require(matchStableBalances[matchId] >= amount, "Insufficient balance");
 
@@ -461,7 +560,6 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
 
             // payout for the winner
             payout = amount - fee;
-
 
             // total accumulated fees 
             accumulatedFees += fee;
@@ -476,7 +574,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             return payout;
         }
 
-    // fucntion handling refund
+    // fucntion for handling the refund
 
         function refund(
             uint256 matchId,
@@ -491,11 +589,16 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             emit StableWithdrawn(matchId, recipient, amount);
         }
 
-    // only owner could withdraw fees 
-    // uses re-entracy guard
+    /*
+       only owner could withdraw fees Using re-entrancy guard
+       the intention is to use bot / script to make it automated the goal is to use go
+
+    */
         function withdrawFees() external onlyOwner nonReentrant {
+
             // fees is the total accumulated fees
             uint256 fees = accumulatedFees;
+
             // fees must be greater than 0
             require(fees > 0, "No fees");
 
@@ -505,18 +608,20 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             // then using safe transfer to handle the error
             IERC20(stablecoin).safeTransfer(owner(), fees);
 
+            // then emit the result
             emit FeesWithdrawn(owner(), fees);
         }
     }
 
-    // the vrf consumer contract 
-
+  
+        // the VRF base consumer will inherit the ConsumerBaseVRFPLus
     contract VRFConsumer is VRFConsumerBaseV2Plus {
+
         // co-ordinator will hold the functions of IVRFCoordinatorV2PLus
         IVRFCoordinatorV2Plus immutable COORDINATOR;
 
-        //
-        
+        // this are the VRF configurations we need 
+
         uint256 public subscriptionId;
         bytes32 public keyHash;
         uint32 public callbackGasLimit = 200000;
@@ -536,24 +641,43 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         // triggred when we request randomness
         event RandomnessRequested(uint256 indexed matchId, uint256 requestId);
 
-        // triggred when we fufil randomness
+        // triggred when we fufill randomness
         event RandomnessFulfilled(uint256 indexed matchId, uint256 randomNumber);
 
         constructor(
-            // takes in this
+            // takes in the three
+
             uint256 _subscriptionId,
             address _vrfCoordinator,
             bytes32 _keyHash
         ) VRFConsumerBaseV2Plus(_vrfCoordinator) {
-            // pass them out 
+
+            // initialize them here
             COORDINATOR = IVRFCoordinatorV2Plus(_vrfCoordinator);
             subscriptionId = _subscriptionId;
             keyHash = _keyHash;
         }
 
+    
+    /*
 
+        set the game contract here, we pass in the address and label it external 
+        restrict it to only owners
+        
+    */
     function setGameContract(address _gameContract) external onlyOwner {
+
+        /*
+          it is required that the game contract must be address(0) then its already set
+          where game contract is an address before its assigned 
+
+        */
         require(gameContract == address(0), "Already set");
+
+        /*
+           it is requireed that the private function game contract
+           the constructor takes in the _gamecontract, after its assigned it must not be address(0)
+        */
         require(_gameContract != address(0), "Invalid address");
         gameContract = _gameContract;
     }
@@ -564,9 +688,16 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             // required that the senders address is the game contract
             require(msg.sender == gameContract, "Only game contract");
 
-    // from the immutable state varaibale pick the requestRandomwords
+    /*
+
+        from the immutable state varaiable( Co-ordinator ) pick the requestRandomwords
+        Interface Co-ordinator V2 address is held in the co-ordinator
+        select the request random words
+
+    */
             uint256 requestId = COORDINATOR.requestRandomWords(
-                // VRFV2PLus help us format request and reponses
+
+                // VRFV2PLusClient help us format request and reponses
 
                 VRFV2PlusClient.RandomWordsRequest({
                     keyHash: keyHash,
@@ -575,6 +706,8 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
                     callbackGasLimit: callbackGasLimit,
                     numWords: numWords,
                     extraArgs: VRFV2PlusClient._argsToBytes(
+                        
+                        // here the native-payment system wil false , then LINK will be used
                         VRFV2PlusClient.ExtraArgsV1({nativePayment: false})
                     )
                 })
@@ -583,14 +716,14 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             // set the mapping with requestId as key to be matchId
             requestIdToMatchId[requestId] = matchId;
 
-            // emeit the event
+            // emit the event
             emit RandomnessRequested(matchId, requestId);
             return requestId;
         }
 
 
         // this is the function for fufilRandom words
-        // 
+        
         function fulfillRandomWords(uint256 requestId, uint256[] calldata randomWords)
             internal
             override
@@ -607,13 +740,14 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
 
             emit RandomnessFulfilled(matchId, randomWords[0]);
 
-            // this call into the game contract and pass in the matchId and first random words
+            // this call into the interface and pass in the matchId and first random word
             ITicTacToeGame(gameContract).handleVRFFulfillment(matchId, randomWords[0]);
         }
     }
 
     // this is gasless Relayer it inherit ownble
     contract GaslessRelayer is Ownable {
+
         // extending the capabilities of erc20 with safe-erc20
         using SafeERC20 for IERC20;
 
@@ -633,7 +767,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         // gas used takes in indexed user and gas used and gas cost
         event GasUsed(address indexed user, uint256 gasUsed, uint256 gasCost);
 
-        // Proceds batch withdrawals event takes in total successful and failed
+        // Proceds batch withdrawals event takes in total, successful and failed
         event BatchProcessed(uint256 total, uint256 successful, uint256 failed);
 
         // constrcutor initailize the stablecoin and pricfeedmanager address
@@ -656,9 +790,10 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             emit GasSponsored(msg.sender, amount);
         }
 
-        /// execute takes in game contract addrress, the matchId , the reciever address 
-        // visibility is external 
-        // can be called only by owner
+        /* execute takes in game contract addrress, the matchId , the reciever address 
+           visibility is external 
+           can be called only by owner
+        */
 
         function executeWithdrawal(
             address gameContract,
@@ -666,24 +801,27 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             address recipient
         ) external onlyOwner {
 
-            // this is a  solidity op-code helper that caputures amount of gas left at the point of 
-            // execution
-            // amount of gas left before the withdrawal function is called
-
+            /*  
+                this is a  solidity op-code helper that caputures amount of gas left at the point of 
+                execution
+                amount of gas left before the withdrawal function is called
+                
+            */
             uint256 initialGas = gasleft();
-
+        
             // from the game contract interface then use the execeute gasless withdrawal function
             ITicTacToeGame(gameContract).executeGaslessWithdrawal(matchId, recipient);
 
-        // +21000  is the intrinsic base cost fo any etherum transaction
-        // +9700 adds buffers for the cost of calldata and extra opcodes
-
-        // gasLeft is how manny gas is left after the withdrawal fucntion is executed 
+            /*
+            +21000  is the intrinsic base cost for any etherum transaction
+            +9700 adds buffers for the cost of calldata and extra opcodes
+            gasLeft is how manny gas is left after the withdrawal fucntion is executed 
+            */
 
             uint256 gasUsed = initialGas - gasleft() + 21000 + 9700; 
 
-        // tx.gasprice is a global variable that return price of gas in wei
-        // for transacion being executed
+            // tx.gasprice is a global variable that return price of gas in wei
+            // for transacion being executed
 
         uint256 gasPrice = tx.gasprice;
         require(gasPrice > 0, "Invalid gas price");
@@ -693,7 +831,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             uint256 totalGasCostInStable = _convertEthToStable(totalGasCostInEth);
 
         // here the mapping of sponsored gas pool with recipient as the key must be 
-        // greater than or equals to total gas cost
+        // greater than or equals to totalgasCostInStable
 
             require(
                 sponsoredGasPool[recipient] >= totalGasCostInStable,
@@ -705,17 +843,19 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             sponsoredGasPool[recipient] -= totalGasCostInStable;
 
 
-            // here we emit the gas used event
+            // here we emit the GasUsed event
             emit GasUsed(recipient, gasUsed, totalGasCostInStable);
         }
 
+            /*
 
-        // this is for batch withdrawals
+            this is for batch withdrawals
+            it takes in game contract address
+            list if ids with call data, since calldata is used mostly with arrays
+            list of recipients addresses
+            only owner could call it
 
-        // it takes in game contract
-        // list if ids 
-        // list of recipients addresses
-        // only owner could call it
+            */
 
         function executeBatchWithdrawals(
         address gameContract,
@@ -723,7 +863,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         address[] calldata recipients
     ) external onlyOwner {
 
-        // it is required to check if their count matches
+        // it is required to check if the MatchIds lenghts matches the recipeients Id, o/w there is a misalignment
 
         require(matchIds.length == recipients.length, "Mismatched arrays");
 
@@ -734,38 +874,48 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         uint256 failed = 0;
 
         // loop through the requested match ids
+
         for (uint256 i = 0; i < matchIds.length; i++) {
-            // check if its address (0) then it fails and increment failed
+
+            // check if its address (0) then it fails then increament the failed
+
             if (recipients[i] == address(0)) {
                 failed++;
                 // then move to the net request
                 continue;
             }
 
-            // try make us call external fucntions safely
-            // if it succed it runs inside the try
-            // it it fails it runs in the catch
-            // this is current contract instance
-            
+                /*
+                try make us call external fucntions safely
+                if it succeed it runs inside the try
+                if it fails it runs in the catch
+                this is current contract instance
 
-            // so only add the ones that are successful
-            // also increment the succesful withrawals
-            // if catch then increase the failed too
+                so only add the ones that are successful
+                also increment the succesful withrawals
+                if catch then increase the failed to0
+            */
 
+            // using this we are calling the current contract
             try this.executeWithdrawal(gameContract, matchIds[i], recipients[i]) {
                 successful++;
             } catch {
                 failed++;
             }
         }
+
         // emit event batch processed
         emit BatchProcessed(matchIds.length, successful, failed);
     }
 
         function _convertEthToStable(uint256 ethAmount) internal view returns (uint256) {
-            // get usd value in 18 decimals 
-            // from the state variable pricefeedmanager call getusdvalue 
-            // and pass in the arguments 
+
+            /*
+            get usd value in 18 decimals 
+            From the state variable pricefeedmanager that holds the PrieFeedmanagers address call getusdvalue 
+            and pass in the arguments 
+            */
+
             uint256 usd18 = priceFeedManager.getUsdValue(address(0), ethAmount);
 
             // using metdata of erc20 get the decimal of the address stablecoin
@@ -777,11 +927,12 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
     }
 
 
-    /// the contract for the tic tac toe game
+    /// the contract for the tic-tac-toe game
     // the contract will inherit IticTactoe, reentrancyguard and ownable
 
     contract TicTacToeGame is ITicTacToeGame, ReentrancyGuard, Ownable {
 
+        // type(int).max will give the highest possible number which is 2^256 - 1, make it a constants
         uint8 constant NO_WINNER = type(uint8).max;
 
 
@@ -790,13 +941,13 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         using SafeERC20 for IERC20;
 
         uint256 public constant MIN_PLAYERS = 2;
-        uint256 public constant MAX_PLAYERS = 2; // Enforce 2 players
+        uint256 public constant MAX_PLAYERS = 2; 
         uint256 public constant MAX_ROUNDS = 5;
         uint256 public constant MOVE_TIMEOUT = 120; // 2 * 60 secs
         uint256 public constant MIN_STAKE_USD = 1 * 10**6; // e.g., USDC 6 decimals i.e $1
         uint256 public constant AUTO_REFUND_DELAY = 1 days; // 24 hrs is enough for refund
 
-        //  this variable will hold the address of the AutomatedStakPool
+        //  this variable will hold the address of the AutomatedStakePool
         AutomatedStakePool public stakePool;
 
         // this variable will hold the address of the VRFCOnsumer
@@ -820,37 +971,38 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         // match counter to generate unique match IDs
         uint256 public matchCounter;
 
-        // mapping of Ids to Matches 
+        // mapping of Ids to Matches, do not forget that Match is a Struct
         mapping(uint256 => Match) public matches;
 
-        // mapping of matchId (to a mapping of player address to boolean)
+        // mapping of matchId (to a mapping of player address to boolean), which is a nested mapping
         mapping(uint256 => mapping(address => bool)) public hasJoined;
 
-        // this should be able to track maych created 
+        // this should be able to track match created using the matchId
         event MatchCreated(uint256 indexed matchId);
 
-        // player that joined the game should have Id that is indexed
-        // an indexed address and amount of stable deposited 
-
+            /*
+            player that joined the game should have Id that is indexed
+            an indexed address and amount of stable deposited 
+            and a stable amount deposited by each player
+            */
         event PlayerJoined(uint256 indexed matchId, address indexed player, uint256 stableAmount);
 
-        // this will trcak the time the game started
+        // this will trackthe time each game started
         event GameStarted(uint256 indexed matchId);
 
         // this will track the first starter 
         event StarterSelected(uint256 indexed matchId, address indexed starter);
 
         // this will track the move made by player on the board
-
         event MoveMade(uint256 indexed matchId, address indexed player, uint8 x, uint8 y);
 
-        // this will track the round won note we have 5 of them
+        // this will track the number of wins ineach round, and we have 5 of them
         event RoundWon(uint256 indexed matchId, uint8 round, address indexed winner);
 
         // this will track the number of draws in each round
         event RoundDraw(uint256 indexed matchId, uint8 round);
 
-        // this will track the winer selected 
+        // this will track the winners selected 
         event WinnerSelected(uint256 indexed matchId, address indexed winner, uint256 totalAmount);
 
         // this will track the number of cancellation of match
@@ -862,13 +1014,13 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         // this will track the auto refunds
         event AutoRefundExecuted(uint256 indexed matchId);
 
-        // this will track the timeout for each player
+        // this will track the player that won through a time-out
         event PlayerTimedOut(uint256 indexed matchId, address indexed player);
 
         // this will track the stake refunded
         event StakeRefunded(uint256 indexed matchId, address indexed player, uint256 amount);
 
-    // this is the constructor for the tic tac toe game
+    // this is the constructor for the tic-tac-toe game
     // pass in the address of the 5 of the them
 
     constructor(
@@ -879,7 +1031,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         address _swapRouter,
         address _weth
     ) Ownable(msg.sender) {
-        // ✅ Validate all external addresses
+        // Validate all external addresses
         require(_vrfConsumer != address(0), "Invalid VRFConsumer address");
         require(_priceFeedManager != address(0), "Invalid PriceFeedManager address");
         require(_gaslessRelayer != address(0), "Invalid GaslessRelayer address");
@@ -887,14 +1039,14 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         require(_swapRouter != address(0), "Invalid SwapRouter address");
         require(_weth != address(0), "Invalid WETH address");
 
-        // ✅ Save stablecoin and wrapped ETH addresses
+        //  Save stablecoin and wrapped ETH addresses
         stablecoin = _stablecoin;
         weth = _weth;
 
-        // ✅ Deploy fresh AutomatedStakePool contract with this contract as owner
+        // Deploy fresh AutomatedStakePool contract with this contract as owner
         stakePool = new AutomatedStakePool(_stablecoin, address(this));
 
-        // ✅ Deploy SwapManager with relevant dependencies
+        // Deploy SwapManager with relevant dependencies
         swapManager = new SwapManager(
             _swapRouter,
             _weth,
@@ -903,35 +1055,50 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             address(this)
         );
 
-        // ✅ Initialize external contract references
+        // Initialize external contract references
         vrfConsumer = VRFConsumer(_vrfConsumer);
         priceFeedManager = PriceFeedManager(_priceFeedManager);
         gaslessRelayer = GaslessRelayer(_gaslessRelayer);
     }
 
 
-        // function ttracks how many matches have been created
-
+        // function tracks how many matches have been created
         function createMatch() external returns (uint256) {
+        
+        // this will increase the number of matches
         matchCounter++;
+
+        // save the match counter into a state variable matchId
         uint256 matchId = matchCounter;
+
+        // lets m be the refrence to the mapping of the matchId to matches
         Match storage m = matches[matchId];
 
+        // declare the game state to be Opened
         m.state = GameState.OPEN;
+
+        // save the timestamp into a variable CreatedAt
         m.createdAt = block.timestamp;
+
+        // this is the time for auto_refund
         m.autoRefundTime = block.timestamp + AUTO_REFUND_DELAY;
 
+        // emit the Matcreated Event
         emit MatchCreated(matchId);
         return matchId;
     }
 
-        // this is to join the game with ETH i.e native ETH
+        /*
 
-        // there is re-enetrancy guard attached and payable to recieve ETH
+        this is to join the game with ETH i.e native ETH
+        there is re-enetrancy guard attached and payable to recieve ETH
+
+        */
         function joinGameWithETH(uint256 matchId) external payable nonReentrant {
 
-            // this is a private fucntion that recieves 
+            // this is a private fucntion that receives(_joingame)
             // matchId, native eth address and its value worth in wei
+
             _joinGame(matchId, address(0), msg.value);
         }
 
@@ -950,15 +1117,17 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             // use safe token transfer from to handle the error that doesnt
             // return boolean 
             // safe transfer from will take in the token address, msg.sender address and amount
+
             IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
 
             // this is the private function that will handle the joining of the game
             // takes in matchId, erc20 token address and amount
+
             _joinGame(matchId, token, amount);
         }
 
 
-        // this will handle the joinning of the game
+        // this will handle the joinning of the game, the visibility is internal
 
         function _joinGame(uint256 matchId, address token, uint256 amount) internal {
         Match storage m = matches[matchId];
@@ -967,16 +1136,19 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         require(amount > 0, "Amount must be greater than 0"); // ADD THIS
         require(priceFeedManager.isTokenSupported(token), "Token not supported");
         require(!hasJoined[matchId][msg.sender], "Already joined");
-        require(m.players.length < MAX_PLAYERS, "Match full");
+        require(m.players.length >= MAX_PLAYERS, "Match full");
 
         // stable amount
             uint256 stableAmount;
+
             // if the token is stablecoin then no need to swap
             if (token == stablecoin) {
                 stableAmount = amount;
             } else {
+
                 // if it is not invalid then
                 if (token != address(0)) {
+
                     // use safetransfer to move the token to swapmanager
                     IERC20(token).safeTransfer(address(swapManager), amount);
                 }
@@ -987,8 +1159,10 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
                     // this will call swap to stable and pass in the value
                     // (token, amount) is the usaual arguments passed
                     // {value: amount} is the value in wei
+
                     stableAmount = swapManager.swapToStable{value: amount}(token, amount);
                 } else {
+                    // this is for erc-20 tokens
                     stableAmount = swapManager.swapToStable(token, amount);
                 }
             }
@@ -996,8 +1170,8 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             // if the stable amount is less than $1 then revert
             require(stableAmount >= MIN_STAKE_USD, "Stake too low");
 
-
-        // firstly set allowance to 0 then force approve the stake pool to spend the stable amount
+  
+            // firstly set allowance to 0 then force approve the stake pool to spend the stable amount
             IERC20(stablecoin).forceApprove(address(stakePool), stableAmount);
 
             // dont forget the stakepool is the new contract deployed for autostakepool and we call 
@@ -1022,14 +1196,15 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             // update the total stable amount in the match
             m.totalStableAmount += stableAmount;
             
-            // checks if player has joined
+            // checks if player has joined i.e checks if the sender address has joined the game
             hasJoined[matchId][msg.sender] = true;
 
             // emit the player joined event
             emit PlayerJoined(matchId, msg.sender, stableAmount);
 
-        // check the minimum player to start the game 
-        // must be greater than or equals to min players
+            // check the minimum player to start the game 
+            // must be greater than or equals to min players
+
             if (m.players.length >= MIN_PLAYERS) {
 
                 // set he game state from Open to Staked
@@ -1045,17 +1220,17 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         // Missing: Check if match was actually created
         require(m.createdAt > 0, "Match does not exist");
         require(m.state == GameState.STAKED, "Not ready");
-        // ...
+        
 
             // this state means its waiting for vrf response 
             // from the onchain co-ordinator
 
             m.state = GameState.VRF_PENDING;
 
-            // from chainLink then request random word[1] in this case
+            // from chainLink then request the first random word
             vrfConsumer.requestRandomWords(matchId);
 
-            // then track with gate game started event
+            // then track with game started event
             emit GameStarted(matchId);
         }
 
@@ -1065,35 +1240,57 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         // takes in matchId and random number
         
     function handleVRFFulfillment(uint256 matchId, uint256 randomNumber) external {
+
+        // its is required that the senders address is the vrfConsumers address
         require(msg.sender == address(vrfConsumer), "Only VRF");
 
         Match storage m = matches[matchId];
+
+        // required to set the referenced game_state to be pending
         require(m.state == GameState.VRF_PENDING, "Invalid state");
 
+        // starter index is random number gotten from chain-link
+        // divided by the players length which is 2 
+
         m.starterIndex = uint8(randomNumber % m.players.length);
+
+        // set the game_state to be in progress
         m.state = GameState.IN_PROGRESS;
         m.currentRound = 1;
 
+        // after the first match then reset the board
         _initializeBoard(matchId);
 
+        // this is the current player Index also the starter
         m.currentPlayerIndex = m.starterIndex;
-        m.lastRoundStarterIndex = m.starterIndex; // INITIALIZE THIS
+
+        // previous player index
+        m.lastRoundStarterIndex = m.starterIndex; 
+
+        // this variable holds the last move time
         m.lastMoveTime = block.timestamp;
 
+        // emit the event StarterSelected providing / emiting its matchId and starter address
         emit StarterSelected(matchId, m.players[m.starterIndex].addr);
     }
 
     
-    // function to make a move on the board
-    // visibility is external
+        // function to make a move on the board
+        // visibility is external
         // where x and y are co-ordinates on the board
         
         function makeMove(uint256 matchId, uint8 x, uint8 y) external {
         Match storage m = matches[matchId];
 
         require(m.state == GameState.IN_PROGRESS, "Game not active");
+
+        // this means x & y can have 0,1,2
         require(x < 3 && y < 3, "Invalid position");
+
+        // this make sure that the board is empty
         require(m.currentBoard.cells[x][y] == CellState.EMPTY, "Cell occupied");
+
+        // this make sure that the senders address is the one that should play
         require(m.players[m.currentPlayerIndex].addr == msg.sender, "Not your turn");
 
         // Check timeout only if not the first move
@@ -1101,79 +1298,101 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             require(block.timestamp - m.lastMoveTime <= MOVE_TIMEOUT, "Move timeout");
         }
 
+        // this make sure that playercell index is 0 and if its player 1 and not player 2
         CellState playerCell = m.currentPlayerIndex == 0 ? CellState.PLAYER1 : CellState.PLAYER2;
+
+        // playerCell make holds the current board positions 
         m.currentBoard.cells[x][y] = playerCell;
+
+        // this increament the moveount
         m.currentBoard.moveCount++;
+
+        // this saves the last move position
         m.lastMoveTime = block.timestamp;
 
+        // this tracks the move made, the senders address for x / y
         emit MoveMade(matchId, msg.sender, x, y);
 
+        // check if there is a win on the board
         if (_checkWin(m.currentBoard, playerCell)) {
+
+            // increase the win for the indexed of the player that won
             m.players[m.currentPlayerIndex].wins++;
+
+            // emit the RoundWon with matchId, which round was won and the senders address
             emit RoundWon(matchId, m.currentRound, msg.sender);
+
+            // then pass into the next round
             _nextRound(matchId, m.currentPlayerIndex);
             return;
         }
-
+        
+        // nut if all the 9 moves are made and no winner
         if (m.currentBoard.moveCount == 9) {
+
+            // emit the draw tracker whith inputs matchid and the current round
             emit RoundDraw(matchId, m.currentRound);
+
+            // since its a draw then indicate that no winner for the matchid and move to the next round or ends
             _nextRound(matchId, NO_WINNER); // Indicate draw
             return;
-    }
+        }
 
         m.currentPlayerIndex = (m.currentPlayerIndex + 1) % 2;
-    }
-        // if opponet hits the time out you will automatically win
+        
+}
+        // if opponet hits the time out you will automatically win for the match
 
         function claimTimeoutWin(uint256 matchId) external {
         Match storage m = matches[matchId];
 
-        // set the state open
+        // set the state to be in_progress
         require(m.state == GameState.IN_PROGRESS, "Game not active");
 
         // make sure that player length is 2 
         require(m.players.length == 2, "Invalid match config");
 
-        // block.timestamp is a global variabale 
-        // lastmoveTime is the last recorded move time stored in Match Struct
-        // move-time is the duration of the game
+            /*
+            block.timestamp is a global variabale 
+            lastmoveTime is the last recorded move time stored in Match Struct
+            move-time is the duration of the game
+            */
 
         // Only check timeout after first move
         require(m.currentBoard.moveCount > 0, "No moves made yet");
-        require(block.timestamp - m.lastMoveTime > MOVE_TIMEOUT, "No timeout yet");
+        require(block.timestamp - m.lastMoveTime <= MOVE_TIMEOUT, "No timeout yet");
 
         // m.currentIndexPlayer is the next player
-    // it alternate if Player(0) plays then index is 1
+        // it alternate if Player(0) plays then index is 1
 
         uint8 opponentIndex = m.currentPlayerIndex;
 
         // store the player that made the winning move
-    // 0 + 1 % 2 - 1
-    // 1 + 1 % 2 - 0
+        // 0 + 1 % 2 - 1
+        // 1 + 1 % 2 - 0
 
-    // the initial player index
+        // the initial player index
         uint8 winnerIndex = (m.currentPlayerIndex + 1) % 2;
         
 
-        // required that only winners can send 
+        // required that only winners can send message
         require(m.players[winnerIndex].addr == msg.sender, "Not eligible");
 
-        // Prevent double claiming
+        // the variable holdin the last move timestamp
         m.lastMoveTime = block.timestamp;
 
         // Update wins
-
         m.players[winnerIndex].wins++;
 
         // Emit events
 
-        // pass in the matchId and opponet address
+        // pass in the matchId and opponet address(i.e player that timed out)
         emit PlayerTimedOut(matchId, m.players[opponentIndex].addr);
 
-        // emit using the matchId, the current round and the senders address
+        // emit that the round is won using the matchId, the current round and the senders address
         emit RoundWon(matchId, m.currentRound, msg.sender);
 
-        // Advance round with the winner
+        // Advance round with the winner increased
         _nextRound(matchId, winnerIndex);
     }
 
@@ -1198,16 +1417,16 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             m.currentBoard.moveCount = 0;
         }
 
-        // this is a function that advance the game to next round 
+
+
+        // this is a private function that advance the game to next round 
         // or ends the game when the round is completed 
-
-
 
     function _nextRound(uint256 matchId, uint8 lastWinnerIndex) internal {
         Match storage m = matches[matchId];
 
         // End match if max rounds reached
-        if (m.currentRound >= MAX_ROUNDS) {
+        if (m.currentRound <= MAX_ROUNDS) {
             _selectWinner(matchId);
             return;
         }
@@ -1221,29 +1440,38 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         uint8 starter;
 
         if (lastWinnerIndex == NO_WINNER) {
-            // Previous round was a draw → switch starter
+
+            // Previous round was a draw then switch starter
             starter = uint8((m.lastRoundStarterIndex + 1) % m.players.length);
         } else if (m.currentRound == 2) {
-            // Special case: first advancement from round 1
+
+            // Special case if the last starter is a winner than switch it
             if (lastWinnerIndex == m.starterIndex) {
                 starter = uint8((m.starterIndex + 1) % m.players.length);
             } else {
+                // if the winner is not a starter then they will start the next round
                 starter = lastWinnerIndex;
             }
         } else {
             // Rounds 3+ follow usual winner/alternate logic
             if (lastWinnerIndex == m.lastRoundStarterIndex) {
+
                 // Winner already started last round → switch
                 starter = uint8((m.lastRoundStarterIndex + 1) % m.players.length);
             } else {
+
                 // Winner did not start → winner starts
                 starter = lastWinnerIndex;
             }
         }
 
-        // Update state
+        // Update currentPlayer to the round starter
         m.currentPlayerIndex = starter;
+
+        // records who started this round for the next round
         m.lastRoundStarterIndex = starter;
+
+        // reset the timer to the urrent block
         m.lastMoveTime = block.timestamp;
     }
 
@@ -1251,14 +1479,14 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 
         function _checkWin(Board storage board, CellState player) internal view returns (bool) {
-            // this is for the horizontal row
+            // this is for the horizontal row,  check if the three cells match the player 
             for (uint8 i = 0; i < 3; i++) {
                 if (board.cells[i][0] == player && board.cells[i][1] == player && board.cells[i][2] == player) {
                     return true;
                 }
             }
 
-            // for the vertical row 
+            // for the vertical row, check if a player has the three cells of the column
             for (uint8 j = 0; j < 3; j++) {
                 if (board.cells[0][j] == player && board.cells[1][j] == player && board.cells[2][j] == player) {
                     return true;
@@ -1278,7 +1506,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             return false;
         }
 
-    /// selects winner func
+    /// selects winner private function
 
     function _selectWinner(uint256 matchId) internal {
         Match storage m = matches[matchId];
@@ -1294,7 +1522,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         // loop through the players 
         for (uint256 i = 0; i < m.players.length; i++) {
 
-            // if any player wins is greater than maxwin
+            // if any player wins is greater than maxwin at the time 
             if (m.players[i].wins > maxWins) {
 
                 // then set the player to maxwins
@@ -1311,6 +1539,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         uint256 playerCount = m.players.length;
         for (uint256 i = 0; i < playerCount; i++) {
             // Saves gas on each iteration
+
             if (
 
                 // if multiple players has same wins number then use the stable amount
@@ -1324,14 +1553,16 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             }
         }
 
-        // if no player won match will be cancelled 
+        // if no player won at all then match will be cancelled 
         // all players get refunded their stables 
+
         if (maxWins == 0) {
             m.state = GameState.CANCELLED;
 
             uint256 playerCount = m.players.length;
             for (uint256 i = 0; i < playerCount; i++) {
                 // Saves gas on each iteration
+
                 if (!m.players[i].withdrawn) {
                     m.players[i].withdrawn = true;
                     stakePool.refund(
@@ -1358,25 +1589,37 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
     }
 
 
+    // fucntion to withdraw Prize
     function withdrawPrize(uint256 matchId) external nonReentrant {
         Match storage m = matches[matchId];
 
+        // required to check if the game state is finished
         require(m.state == GameState.FINISHED, "Game not finished");
+
+        // required that the sender must be the winner
         require(msg.sender == m.winner, "Not winner");
 
+        // this is the total prize won
         uint256 totalPrize;
+
+        // loop through all the players in the game
         for (uint256 i = 0; i < m.players.length; i++) {
             Player storage player = m.players[i];
+
+            // if they are yet to withdraw funds, marks them as withdrawn
             if (!player.withdrawn) {
                 player.withdrawn = true;
+
+                // add their stable amount to this variable
                 totalPrize += player.stableAmount;
             }
         }
 
+        // check if totalPrize is more than minimum threshold
         require(totalPrize > 0, "Nothing to withdraw");
 
-        // Update state BEFORE external call
-        m.state = GameState.PAID_OUT; // ⚠️ This happens even if withdrawal fails
+        // Update state BEFORE external call, and set the state to Paid_Out
+        m.state = GameState.PAID_OUT;
 
         stakePool.withdraw(matchId, m.winner, totalPrize);
 
@@ -1384,21 +1627,19 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
     }
 
 
-        // with draws the stable stake
-
-    
-    
+    // with_draws the stable stake
     function withdrawMyStake(uint256 matchId) external nonReentrant {
         Match storage m = matches[matchId];
 
 
-        // required that game is finished or camcelled
+        // required that game is finished or cancelled
         require(
             m.state == GameState.FINISHED || m.state == GameState.CANCELLED,
             "Game not finished"
         );
 
-        // Find player index
+        // set PlayerIndex to the highest possible uint256(i.e 2^256 - 1)
+        // this acts like a place holder menaing not found yet
         uint256 playerIndex = type(uint256).max;
 
         // loop through the player lenghth and set p
@@ -1416,6 +1657,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         }
 
         // check again if caller is one of the player of the match
+        // if the caller is not found then revert
         require(playerIndex != type(uint256).max, "Not a player");
 
 
@@ -1427,7 +1669,8 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
 
         // if the game state is cancelled
         if (m.state == GameState.CANCELLED) {
-            // Everyone gets a refund
+
+            // Everyone gets a refund and mark the player withdrawn
             player.withdrawn = true;
             stakePool.refund(matchId, msg.sender, player.stableAmount);
 
@@ -1445,7 +1688,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
     }
 
 
-
+    // execute gasless withdrawal
     function executeGaslessWithdrawal(
         uint256 matchId,
         address recipient
@@ -1455,45 +1698,65 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         // Access control - only relayer can call this
         require(msg.sender == address(gaslessRelayer), "Only relayer");
 
+        // ensure the game state is finished or cancelled
         require(
             m.state == GameState.FINISHED || m.state == GameState.CANCELLED,
             "Game not finished"
         );
 
         // Find player
+
+        // again we use a place holder
         uint256 playerIndex = type(uint256).max;
+
+        // we loop through the player length
         for (uint256 i = 0; i < m.players.length; i++) {
             if (m.players[i].addr == recipient) {
                 playerIndex = i;
                 break;
             }
         }
+
+        // Use a placeHolder here
         require(playerIndex != type(uint256).max, "Not a player");
 
         Player storage player = m.players[playerIndex];
+        
+        // required that player has not withdrawn
         require(!player.withdrawn, "Already withdrawn");
 
         // For finished games, only winner can withdraw
         if (m.state == GameState.FINISHED) {
             require(recipient == m.winner, "Only winner");
         }
-
+        
+        // set this because of re-entrancy guard to prevent double withdraws
         player.withdrawn = true;
+
+        // stores the players stake in amount
         uint256 amount = player.stableAmount;
 
+    
+    // if the match was cancelled then refund the player and emit
         if (m.state == GameState.CANCELLED) {
             stakePool.refund(matchId, recipient, amount);
             emit StakeRefunded(matchId, recipient, amount);
         } else {
+
+            // o/w refund the player and emit
             stakePool.withdraw(matchId, recipient, amount);
             emit PrizeWithdrawn(matchId, recipient, amount);
         }
     }
 
+    // automatic refund
     function autoRefundExpired(uint256 matchId) external nonReentrant {
         Match storage m = matches[matchId];
 
+        // make sure that the current block is greater than the auto-refunc deadline
         require(block.timestamp >= m.autoRefundTime, "Refund not ready");
+
+        // the game mus not be finalized
         require(
             m.state != GameState.PAID_OUT && m.state != GameState.CANCELLED,
             "Already finalized"
@@ -1501,19 +1764,25 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         
         // Refund all players
         for (uint256 i = 0; i < m.players.length; i++) {
+
+            // if the player has not withdrawn
             if (!m.players[i].withdrawn) {
                 Player storage player = m.players[i];
+
+                // mark them as withdrawn, refund and emit
                 player.withdrawn = true;
                 stakePool.refund(matchId, player.addr, player.stableAmount);
                 emit StakeRefunded(matchId, player.addr, player.stableAmount); // ADD EVENT
             }
         }
 
+        // set the game state as cancelled and emit the event
         m.state = GameState.CANCELLED;
         emit AutoRefundExecuted(matchId);
     }
     
 
+        // this is a getter variable that fetch the state of the match
         function getMatch(uint256 matchId) external view returns (
             GameState state,
             address[] memory playerAddrs,
@@ -1524,9 +1793,14 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
         ) {
             Match storage m = matches[matchId];
 
+            // creates memory array for the number of the players
+
             playerAddrs = new address[](m.players.length);
             stableAmounts = new uint256[](m.players.length);
             wins = new uint8[](m.players.length);
+
+            // loop through all the players and copy their address, staked_amount and wins into
+            // this arrays
 
             uint256 playerCount = m.players.length;
             for (uint256 i = 0; i < playerCount; i++) {
@@ -1535,23 +1809,32 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
                 wins[i] = m.players[i].wins;
             }
 
+            // this is the return values
             return (m.state, playerAddrs, stableAmounts, wins, m.currentRound, m.winner);
         }
 
+        // this is a getter function that returns the Cell state
         function getBoard(uint256 matchId) external view returns (CellState[3][3] memory) {
             return matches[matchId].currentBoard.cells;
         }
 
+        // returns the address of the player whose turn is
         function getCurrentPlayer(uint256 matchId) external view returns (address) {
             Match storage m = matches[matchId];
+
+            // if it the game is not in progess return nil
             if (m.state != GameState.IN_PROGRESS) {
                 return address(0);
             }
+            // return the current player address
             return m.players[m.currentPlayerIndex].addr;
         }
 
+        // get the remainin time before a timeout
         function getTimeRemaining(uint256 matchId) external view returns (uint256) {
             Match storage m = matches[matchId];
+
+            // if the game is not in progress return nil(0)
             if (m.state != GameState.IN_PROGRESS) {
                 return 0;
             }
@@ -1559,6 +1842,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             if (elapsed >= MOVE_TIMEOUT) {
                 return 0;
             }
+            // return the remain secs
             return MOVE_TIMEOUT - elapsed;
         }
 
