@@ -4,11 +4,11 @@ pragma solidity ^0.8.20;
 import {VRFConsumerBaseV2Plus} from "chainlink-brownie-contracts/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
 import {VRFV2PlusClient} from "chainlink-brownie-contracts/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
 import {IVRFCoordinatorV2Plus} from "chainlink-brownie-contracts/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
-import "chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
-import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
-import "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
-import "openzeppelin-contracts/contracts/access/Ownable.sol";
+import {AggregatorV3Interface} from "chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 
     // game can exist in 7 states
@@ -338,8 +338,12 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             it checks if the msg.sender equals to gamecontract
             _; is a place holder if its passes the rest of the body exceutes */
 
-        modifier onlyGame() {
+        function _onlyGame() internal view {
             require(msg.sender == gameContract, "Only game contract");
+        }
+
+        modifier onlyGame() {
+            _onlyGame();
             _;
         }
 
@@ -517,8 +521,12 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
          the goal here is to check if the game-contract is also the senders address
         */
 
-        modifier onlyGame2() {
+        function _onlyGame() internal view {
             require(msg.sender == gameContract, "Only game contract");
+        }
+
+        modifier onlyGame() {
+            _onlyGame();
             _;
         }
 
@@ -540,7 +548,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
 
         */
 
-        function depositStable(uint256 matchId, uint256 amount) external onlyGame2 {
+        function depositStable(uint256 matchId, uint256 amount) external onlyGame {
 
             // this will update the mapping of the balance by adding the deposited stables
             matchStableBalances[matchId] += amount;
@@ -561,7 +569,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             uint256 matchId,
             address recipient,
             uint256 amount
-        ) external onlyGame2 nonReentrant returns (uint256 payout) {
+        ) external onlyGame nonReentrant returns (uint256 payout) {
 
             /* 
                it is required to check if the mapping of matchstStablesBalance 
@@ -600,7 +608,7 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
             uint256 matchId,
             address recipient,
             uint256 amount
-        ) external onlyGame2 nonReentrant {
+        ) external onlyGame nonReentrant {
             require(matchStableBalances[matchId] >= amount, "Insufficient balance");
             matchStableBalances[matchId] -= amount;
 
